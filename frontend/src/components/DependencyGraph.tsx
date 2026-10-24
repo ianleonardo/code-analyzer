@@ -26,12 +26,15 @@ export function DependencyGraph({
   selected,
   onSelect,
   kinds,
+  marks,
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   selected: string | null;
   onSelect: (path: string) => void;
   kinds: Set<string>;
+  /** Optional per-node mark drawn as a ring: changed (solid) or impacted (dashed), e.g. for a PR impact graph. */
+  marks?: Record<string, "changed" | "impacted">;
 }) {
   const [positions, setPositions] = useState<Record<string, Point>>({});
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
@@ -275,6 +278,8 @@ export function DependencyGraph({
               >
                 {node.scc_id !== null && <circle r={radius + 4} fill="none" stroke={color("critical")} strokeDasharray="3 2" strokeWidth={1.2} />}
                 {isSelected && <circle r={radius + 7} fill="none" stroke={color("primary")} strokeWidth={1.5} />}
+                {marks?.[node.path] === "changed" && <circle r={radius + 2.5} fill="none" stroke={color("warning")} strokeWidth={2.2} />}
+                {marks?.[node.path] === "impacted" && <circle r={radius + 2.5} fill="none" stroke={color("info")} strokeDasharray="2 2" strokeWidth={1.4} />}
                 <rect
                   x={-radius}
                   y={-radius}

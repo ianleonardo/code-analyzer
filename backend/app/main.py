@@ -12,7 +12,7 @@ from app.audit_middleware import AuditMiddleware
 from app.config import load_dotenv
 from app.deps import enforce_access
 from app.errors import AppError
-from app.routers import admin, analyses, chat, comparisons, dashboard, git, repositories
+from app.routers import admin, analyses, chat, comparisons, dashboard, git, impact, repositories
 from app.routers import auth as auth_routes
 from app.services import jobs
 
@@ -55,7 +55,7 @@ app.include_router(auth_routes.router, prefix="/api")
 app.include_router(git.public, prefix="/api")  # OAuth popup callback (state-signed, no bearer token)
 # Every other route is checked against the user's role: area from the path, read or write from the method.
 guarded = [Depends(enforce_access)]
-for module in (dashboard, repositories, analyses, git, chat, comparisons, admin):
+for module in (dashboard, repositories, analyses, impact, git, chat, comparisons, admin):
     app.include_router(module.router, prefix="/api", dependencies=guarded)
 
 

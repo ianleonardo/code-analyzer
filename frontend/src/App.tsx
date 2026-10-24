@@ -10,6 +10,9 @@ import { ChatPage } from "./pages/ChatPage";
 import { CompareListPage, ComparisonPage } from "./pages/ComparePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GitConnectionsPage } from "./pages/GitConnectionsPage";
+import { FeaturesPage } from "./pages/impact/FeaturesPage";
+import { ImpactListPage } from "./pages/impact/ImpactListPage";
+import { ImpactRunPage } from "./pages/impact/ImpactRunPage";
 import { LoginPage } from "./pages/LoginPage";
 import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { RepositoryPage } from "./pages/RepositoryPage";
@@ -47,6 +50,9 @@ export function App() {
             <Route path="/repositories/:repoId" element={<RepositoryPage />} />
             <Route path="/analyses" element={<AnalysesPage />} />
             <Route path="/analyses/:analysisId" element={<AnalysisPage />} />
+            <Route path="/impact" element={<ImpactListPage />} />
+            <Route path="/impact/:runId" element={<ImpactRunPage />} />
+            <Route path="/repositories/:repoId/features" element={<FeaturesPage />} />
           </Route>
           <Route element={<RequireArea areas={["repositories", "insights"]} />}>
             <Route path="/compare" element={<CompareListPage />} />

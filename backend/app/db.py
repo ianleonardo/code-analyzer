@@ -556,7 +556,147 @@ SCHEMA_V4 = [
     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT FALSE",
 ]
 
-MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4]
+# v5: pull-request impact analysis (runs, changed files / symbols, impacted files, events), feature catalogue,
+# analyses prepared from a PR workspace (source_dir) and kept out of branch history (purpose = 'pr')
+SCHEMA_V5 = [
+    "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS source_dir VARCHAR(2000) DEFAULT ''",
+    "ALTER TABLE analyses ADD COLUMN IF NOT EXISTS purpose VARCHAR(20) DEFAULT 'branch'",
+    "ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS llm_pr_function_limit INTEGER DEFAULT 25",
+    """
+    CREATE TABLE IF NOT EXISTS pull_requests (
+        pr_id VARCHAR(64) PRIMARY KEY,
+        repo_id VARCHAR(64) NOT NULL,
+        number INTEGER NOT NULL DEFAULT 0,
+        title VARCHAR(1000) NOT NULL DEFAULT '',
+        author VARCHAR(255) NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        source_branch VARCHAR(255) NOT NULL DEFAULT '',
+        target_branch VARCHAR(255) NOT NULL DEFAULT '',
+        source_clone_url VARCHAR(1000) NOT NULL DEFAULT '',
+        url VARCHAR(1000) NOT NULL DEFAULT '',
+        state VARCHAR(30) NOT NULL DEFAULT '',
+        head_sha VARCHAR(64) NOT NULL DEFAULT '',
+        base_sha VARCHAR(64) NOT NULL DEFAULT '',
+        created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pr_impact_runs (
+        run_id VARCHAR(64) PRIMARY KEY,
+        repo_id VARCHAR(64) NOT NULL,
+        pr_id VARCHAR(64) NOT NULL DEFAULT '',
+        mode VARCHAR(10) NOT NULL DEFAULT 'pr',
+        title VARCHAR(1000) NOT NULL DEFAULT '',
+        base_ref VARCHAR(255) NOT NULL DEFAULT '',
+        head_ref VARCHAR(255) NOT NULL DEFAULT '',
+        base_sha VARCHAR(64) NOT NULL DEFAULT '',
+        head_sha VARCHAR(64) NOT NULL DEFAULT '',
+        merge_base_sha VARCHAR(64) NOT NULL DEFAULT '',
+        base_analysis_id VARCHAR(64) NOT NULL DEFAULT '',
+        head_analysis_id VARCHAR(64) NOT NULL DEFAULT '',
+        status VARCHAR(20) NOT NULL,
+        stage VARCHAR(80) NOT NULL DEFAULT '',
+        progress DOUBLE PRECISION NOT NULL DEFAULT 0,
+        message TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        risk DOUBLE PRECISION,
+        risk_label VARCHAR(20) NOT NULL DEFAULT '',
+        result_json TEXT NOT NULL DEFAULT '{}',
+        narrative_json TEXT NOT NULL DEFAULT '{}',
+        llm_used BOOLEAN NOT NULL DEFAULT FALSE,
+        ruleset_version VARCHAR(20) NOT NULL DEFAULT '',
+        started_by VARCHAR(64) NOT NULL,
+        created_at TIMESTAMP NOT NULL,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pr_run_events (
+        event_id VARCHAR(64) PRIMARY KEY,
+        run_id VARCHAR(64) NOT NULL,
+        ts TIMESTAMP NOT NULL,
+        level VARCHAR(10) NOT NULL,
+        message TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pr_changed_files (
+        row_id VARCHAR(64) PRIMARY KEY,
+        run_id VARCHAR(64) NOT NULL,
+        path VARCHAR(1000) NOT NULL,
+        old_path VARCHAR(1000) NOT NULL DEFAULT '',
+        status VARCHAR(10) NOT NULL,
+        additions INTEGER NOT NULL DEFAULT 0,
+        deletions INTEGER NOT NULL DEFAULT 0,
+        layer VARCHAR(20) NOT NULL DEFAULT '',
+        role VARCHAR(60) NOT NULL DEFAULT '',
+        change_kinds_json TEXT NOT NULL DEFAULT '[]',
+        hunks_json TEXT NOT NULL DEFAULT '[]'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pr_changed_symbols (
+        row_id VARCHAR(64) PRIMARY KEY,
+        run_id VARCHAR(64) NOT NULL,
+        path VARCHAR(1000) NOT NULL,
+        qualified_name VARCHAR(1000) NOT NULL,
+        name VARCHAR(500) NOT NULL DEFAULT '',
+        kind VARCHAR(30) NOT NULL DEFAULT '',
+        change_type VARCHAR(20) NOT NULL,
+        signature_before TEXT NOT NULL DEFAULT '',
+        signature_after TEXT NOT NULL DEFAULT '',
+        exported BOOLEAN NOT NULL DEFAULT FALSE,
+        line_start INTEGER NOT NULL DEFAULT 0,
+        line_end INTEGER NOT NULL DEFAULT 0,
+        flags_json TEXT NOT NULL DEFAULT '[]',
+        content_hash VARCHAR(64) NOT NULL DEFAULT '',
+        logic_json TEXT NOT NULL DEFAULT '{}',
+        logic_source VARCHAR(10) NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pr_impacted (
+        row_id VARCHAR(64) PRIMARY KEY,
+        run_id VARCHAR(64) NOT NULL,
+        path VARCHAR(1000) NOT NULL,
+        depth INTEGER NOT NULL DEFAULT 0,
+        via_path VARCHAR(1000) NOT NULL DEFAULT '',
+        via_kind VARCHAR(20) NOT NULL DEFAULT '',
+        symbols_json TEXT NOT NULL DEFAULT '[]',
+        confidence VARCHAR(10) NOT NULL DEFAULT '',
+        reason VARCHAR(500) NOT NULL DEFAULT '',
+        layer VARCHAR(20) NOT NULL DEFAULT '',
+        role VARCHAR(60) NOT NULL DEFAULT '',
+        is_test BOOLEAN NOT NULL DEFAULT FALSE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS features (
+        feature_id VARCHAR(64) PRIMARY KEY,
+        repo_id VARCHAR(64) NOT NULL,
+        name VARCHAR(300) NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        patterns_json TEXT NOT NULL DEFAULT '[]',
+        source VARCHAR(10) NOT NULL DEFAULT 'user',
+        confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+        created_by VARCHAR(64) NOT NULL DEFAULT '',
+        created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_prs_repo ON pull_requests (repo_id)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_runs_repo ON pr_impact_runs (repo_id)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_events_run ON pr_run_events (run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_files_run ON pr_changed_files (run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_symbols_run ON pr_changed_symbols (run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_symbols_hash ON pr_changed_symbols (content_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_pr_impacted_run ON pr_impacted (run_id)",
+    "CREATE INDEX IF NOT EXISTS ix_features_repo ON features (repo_id)",
+]
+
+MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5]
 
 TABLES = (
     "roles",
@@ -581,7 +721,17 @@ TABLES = (
     "chat_sessions",
     "chat_messages",
     "audit_log",
+    "pull_requests",
+    "pr_impact_runs",
+    "pr_run_events",
+    "pr_changed_files",
+    "pr_changed_symbols",
+    "pr_impacted",
+    "features",
 )
+
+# Child tables of one PR impact run, deleted together with it.
+PR_RUN_TABLES = ("pr_run_events", "pr_changed_files", "pr_changed_symbols", "pr_impacted")
 
 # Child tables of one analysis, deleted together with it.
 ANALYSIS_TABLES = (

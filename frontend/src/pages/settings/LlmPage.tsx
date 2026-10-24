@@ -113,11 +113,12 @@ export function LlmPage() {
   const [fileLimit, setFileLimit] = useState("40");
   const [chunkLimit, setChunkLimit] = useState("3000");
   const [catalogLimit, setCatalogLimit] = useState("60");
+  const [prLimit, setPrLimit] = useState("25");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    api<Settings>("/api/settings").then((s) => { setSettings(s); setPrompt(s.global_system_prompt); setFileLimit(String(s.llm_file_limit)); setChunkLimit(String(s.embedding_chunk_limit)); setCatalogLimit(String(s.llm_catalog_limit ?? 60)); }).catch((err) => setError(errorText(err)));
+    api<Settings>("/api/settings").then((s) => { setSettings(s); setPrompt(s.global_system_prompt); setFileLimit(String(s.llm_file_limit)); setChunkLimit(String(s.embedding_chunk_limit)); setCatalogLimit(String(s.llm_catalog_limit ?? 60)); setPrLimit(String(s.llm_pr_function_limit ?? 25)); }).catch((err) => setError(errorText(err)));
   }, []);
 
   async function saveGeneral(body: Partial<Settings> & Record<string, unknown>) {
@@ -151,9 +152,9 @@ export function LlmPage() {
                 />
               ))}
             </div>
-            <form className="panel space-y-3 p-3" onSubmit={(e) => { e.preventDefault(); void saveGeneral({ global_system_prompt: prompt, llm_file_limit: Number(fileLimit), embedding_chunk_limit: Number(chunkLimit), llm_catalog_limit: Number(catalogLimit) }); }}>
+            <form className="panel space-y-3 p-3" onSubmit={(e) => { e.preventDefault(); void saveGeneral({ global_system_prompt: prompt, llm_file_limit: Number(fileLimit), embedding_chunk_limit: Number(chunkLimit), llm_catalog_limit: Number(catalogLimit), llm_pr_function_limit: Number(prLimit) }); }}>
               <div className="label-micro">Analysis & chat</div>
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Files summarised by the LLM per analysis" hint="The most central files (PageRank), visited bottom-up. Cached by content hash across runs. 0 disables.">
                   <input className="field" inputMode="numeric" value={fileLimit} onChange={(e) => setFileLimit(e.target.value)} />
                 </Field>
@@ -162,6 +163,9 @@ export function LlmPage() {
                 </Field>
                 <Field label="Layer catalogue items explained by the LLM" hint="Purpose and business rules for endpoints, screens, services, jobs and tables (most important first). Cached by content hash. 0 = deterministic only.">
                   <input className="field" inputMode="numeric" value={catalogLimit} onChange={(e) => setCatalogLimit(e.target.value)} />
+                </Field>
+                <Field label="Changed functions explained per PR impact run" hint="The LLM reads the before / after code of the riskiest changed functions; claims are cross-checked against the code. Cached by content hash. 0 = deterministic only.">
+                  <input className="field" inputMode="numeric" value={prLimit} onChange={(e) => setPrLimit(e.target.value)} />
                 </Field>
               </div>
               <Field label="Global system prompt (Chat with Analyst)">

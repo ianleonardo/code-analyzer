@@ -1,5 +1,6 @@
 """Every test gets a fresh database. Tests run on DuckDB, and also on PostgreSQL when TEST_DATABASE_URL is set."""
 
+import json
 import os
 import textwrap
 from pathlib import Path
@@ -190,6 +191,10 @@ class FakeAdapter:
                 return '{"narrative": "## Summary\\nLeft and right differ."}'
             if '"business_purpose"' in user:
                 return '{"business_purpose": "Manages customer orders.", "summary": "An order service.", "key_capabilities": ["Order lookup"], "architecture_notes": [], "risks": ["Cycle in util"]}'
+            if "### ITEM" in user:
+                import re
+                keys = re.findall(r"### ITEM (\S+)", user)
+                return json.dumps({"items": [{"key": k, "purpose": "Handles business logic.", "rules": []} for k in keys]})
             return '```json\n{"summary": "Handles orders.", "business_capability": "Ordering"}\n```'
         return "The order flow goes from `app/api/orders.py` to `OrderService.find`."
 

@@ -25,12 +25,20 @@ def _int(name: str, default: int) -> int:
 
 
 def data_dir() -> Path:
-    return Path(_env("DATA_DIR") or str(ROOT / "data"))
+    raw = _env("DATA_DIR")
+    if raw:
+        p = Path(raw)
+        return p if p.is_absolute() else (ROOT / p).resolve()
+    return (ROOT / "data").resolve()
 
 
 def workspace_dir() -> Path:
     """Scratch space for clones and extracted archives. Cleared after each analysis."""
-    return Path(_env("WORKSPACE_DIR") or str(data_dir() / "workspaces"))
+    raw = _env("WORKSPACE_DIR")
+    if raw:
+        p = Path(raw)
+        return p if p.is_absolute() else (ROOT / p).resolve()
+    return (data_dir() / "workspaces").resolve()
 
 
 # --- database -------------------------------------------------------------------------------------------------------
@@ -46,7 +54,10 @@ def db_engine() -> str:
 
 def db_path() -> Path:
     configured = _env("DUCKDB_PATH")
-    return Path(configured) if configured else data_dir() / "codeanalyzer.duckdb"
+    if configured:
+        p = Path(configured)
+        return p if p.is_absolute() else (ROOT / p).resolve()
+    return (data_dir() / "codeanalyzer.duckdb").resolve()
 
 
 def database_url() -> str:

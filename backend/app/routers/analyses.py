@@ -8,8 +8,8 @@ router = APIRouter(prefix="/analyses", tags=["analyses"])
 
 
 @router.get("")
-def list_analyses(repo_id: str = "", status: str = "", limit: int = 100, user: dict = Depends(current_user)):
-    return analyses.list_analyses(user, repo_id, status, limit)
+def list_analyses(repo_id: str = "", status: str = "", limit: int = 100, include_pr: bool = False, user: dict = Depends(current_user)):
+    return analyses.list_analyses(user, repo_id, status, limit, include_pr)
 
 
 @router.get("/{analysis_id}")

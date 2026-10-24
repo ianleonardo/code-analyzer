@@ -33,6 +33,25 @@ def _run(analysis_id: str) -> None:
         _cancelled.discard(analysis_id)
 
 
+def _run_impact(run_id: str) -> None:
+    from app.services import pr_impact
+
+    try:
+        pr_impact.execute(run_id, is_cancelled)
+    except Exception:  # noqa: BLE001
+        logger.exception("Impact worker crashed for %s", run_id)
+    finally:
+        _cancelled.discard(run_id)
+
+
+def submit_impact(run_id: str) -> None:
+    """A PR impact run: prepares the base / head snapshots, analyses them inline (no nested pool work) and diffs them."""
+    if os.environ.get("ANALYSIS_SYNC") == "1":
+        _run_impact(run_id)
+        return
+    _pool().submit(_run_impact, run_id)
+
+
 def submit(analysis_id: str) -> None:
     if os.environ.get("ANALYSIS_SYNC") == "1":
         _run(analysis_id)
@@ -49,7 +68,23 @@ def is_cancelled(analysis_id: str) -> bool:
 
 
 def resume_after_restart() -> None:
-    """Queued work is picked up again; work that was running when the server stopped is marked failed."""
+    """Queued work is picked up again; work that was running when the server stopped is marked failed.
+
+    Analyses that belong to a PR impact run read a prepared snapshot, so they are never resumed on their own:
+    the impact run is resumed instead and prepares them again.
+    """
+    db.exec_sql(
+        "UPDATE analyses SET status = 'failed', error = 'Interrupted by a server restart. Run the impact analysis again.', message = 'Interrupted', finished_at = ? "
+        "WHERE status IN ('queued', 'running') AND coalesce(purpose, 'branch') = 'pr'",
+        [db.now()],
+    )
+    for row in db.fetchall("SELECT run_id FROM pr_impact_runs WHERE status = 'running'"):
+        db.exec_sql(
+            "UPDATE pr_impact_runs SET status = 'failed', error = 'Interrupted by a server restart. Run it again.', message = 'Interrupted', finished_at = ? WHERE run_id = ?",
+            [db.now(), row["run_id"]],
+        )
+    for row in db.fetchall("SELECT run_id FROM pr_impact_runs WHERE status = 'queued' ORDER BY created_at"):
+        submit_impact(row["run_id"])
     for row in db.fetchall("SELECT analysis_id FROM analyses WHERE status = 'running'"):
         db.exec_sql(
             "UPDATE analyses SET status = 'failed', error = 'Interrupted by a server restart. Run it again.', message = 'Interrupted', finished_at = ? WHERE analysis_id = ?",

@@ -51,7 +51,7 @@ def _prompt(batch: list[Item]) -> str:
     parts = []
     for item in batch:
         parts.append(
-            f"### ITEM {item.key}\nLAYER: {item.layer} KIND: {item.kind} NAME: {item.name}\nFILE: {item.path}:{item.line_start}\nSIGNATURE: {item.signature}\n"
+            f"### ITEM {item.key}\nLAYER: {item.layer} KIND: {item.kind} NAME: {item.name}\nLOCATION: {item.path}:{item.line_start}\nSIGNATURE: {item.signature}\n"
             f"FACTS (extracted from code, trustworthy): {json.dumps(_facts(item), default=str)[:3500]}\n"
             f"CODE (line numbers start at {item.line_start}):\n{item.code[:EXCERPT]}\n"
         )

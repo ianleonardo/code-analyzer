@@ -1,6 +1,7 @@
 """Role-based access: each role gives none / read / write on three areas.
 
-  repositories - Repositories and their analyses (register repos, run / delete analyses, browse results)
+  repositories - Repositories and their analyses (register repos, run / delete analyses, browse results),
+                 pull-request impact runs and the feature catalogue
   insights     - Chat with Analyst and Repository Comparison
   settings     - Settings (LLM, users, user roles, database, audit log)
 
@@ -56,7 +57,7 @@ def require(user: dict, area: str, need: str = "read") -> None:
         raise AppError(403, "Forbidden")
 
 
-_REPOSITORIES = {"repositories", "analyses", "git"}
+_REPOSITORIES = {"repositories", "analyses", "git", "impact-runs", "features"}
 _INSIGHTS_READ_ONLY = {"chat"}  # chatting is a read of the stored analysis
 _INSIGHTS = {"comparisons"}
 _SETTINGS = {"settings", "users", "roles", "audit", "database"}

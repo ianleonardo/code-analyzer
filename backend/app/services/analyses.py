@@ -49,9 +49,11 @@ def _file_payload(row: dict) -> dict:
     return row
 
 
-def list_analyses(user: dict, repo_id: str = "", status: str = "", limit: int = 100) -> list[dict]:
+def list_analyses(user: dict, repo_id: str = "", status: str = "", limit: int = 100, include_pr: bool = False) -> list[dict]:
     require(user, "repositories", "read")
     where, params = ["1=1"], []
+    if not include_pr:
+        where.append("coalesce(a.purpose, 'branch') = 'branch'")
     if repo_id:
         where.append("a.repo_id = ?")
         params.append(repo_id)

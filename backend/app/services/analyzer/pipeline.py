@@ -88,6 +88,13 @@ def _uploads_dir(repo_id: str) -> Path:
 
 def _prepare_source(run: Run, analysis: dict, repo: dict, scratch: Path) -> Path:
     source = repo["source_type"]
+    if analysis.get("source_dir"):
+        # Prepared by a PR impact run: one commit exported from the PR workspace with `git archive` (no .git, no credentials).
+        root = Path(analysis["source_dir"])
+        if not root.is_dir():
+            raise AppError(400, "The prepared commit snapshot is missing; run the impact analysis again.")
+        run.log(f"Reading commit {(analysis.get('commit_sha') or '')[:10]} exported from the pull-request workspace", 8)
+        return root
     if source in REMOTE_SOURCES:
         ref = git_hosts.parse_url(repo["url"])
         credential = git_credentials.credential_for(analysis["started_by"], ref)
@@ -170,7 +177,7 @@ def _clear_results(analysis_id: str) -> None:
 
 def _previous(repo_id: str, branch: str, exclude: str) -> dict | None:
     return db.fetchone(
-        "SELECT * FROM analyses WHERE repo_id = ? AND branch = ? AND status = 'completed' AND analysis_id <> ? ORDER BY finished_at DESC LIMIT 1",
+        "SELECT * FROM analyses WHERE repo_id = ? AND branch = ? AND status = 'completed' AND analysis_id <> ? AND coalesce(purpose, 'branch') = 'branch' ORDER BY finished_at DESC LIMIT 1",
         [repo_id, branch, exclude],
     )
 

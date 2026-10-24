@@ -72,6 +72,21 @@ and **Light Laboratory** modes.
   **API & data contract changes** from the layer catalogue (endpoints, request / response fields, parameters, columns,
   screens, jobs, configuration) with potentially breaking changes flagged, optional LLM narrative, and chat about the
   comparison.
+- **Pull-request impact** (rail › Impact, or a repository › PR impact) — pick an open pull request (GitHub, GitHub
+  Enterprise, Bitbucket Cloud incl. forks, Bitbucket Server) or any two refs (also local git folders). The head is diffed
+  against its **merge-base** (shallow fetch, deepened until one exists); both commits go through the normal engine
+  (an analysis of the same commit is reused). The report shows changed symbols (added / modified / removed, signature
+  and behaviour-tag changes such as a new `db-write`), **symbol-level propagation** (a dependant counts only when its
+  code uses an affected symbol), affected **endpoints, jobs, listeners, screens** grouped by **feature**, configuration
+  changes **by key and environment** with the code that reads each key and risk rules (timeouts ×N, loosened TLS/CORS,
+  flipped flags, changed endpoints, committed secrets, removed-but-read keys), Kubernetes / Dockerfile / Terraform / CI
+  rules, affected tests and test gaps, graph delta (new layer violations and cycles), dependency bumps, new concerns,
+  suggested reviewers (CODEOWNERS + history) and an **explainable risk score** (every factor, weight and
+  contribution). With an LLM configured it reads the before / after logic of the riskiest changed functions (claims
+  cross-checked against the code, cached by content hash) and writes the narrative, description-vs-diff drift and a
+  review checklist; the risk label stays deterministic. The PR head is never built or run.
+- **Feature catalogue** (repository › Features) — features proposed from the entry points (LLM, or by route / folder),
+  confirmed and edited by users with route / path / item / name patterns; PR impact groups entry points by them.
 - **Admin** (as in SpecForge) — LLM (Gemini, Spirare; encrypted write-only keys; active provider; test connection),
   Users (local or Active Directory), User Roles (none/read/write on *Repositories*, *Insights*, *Settings*), Database,
   Audit Log.

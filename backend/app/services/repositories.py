@@ -31,7 +31,7 @@ def _analyses_by_repo() -> tuple[dict[str, dict], dict[str, list[dict]]]:
     rows = db.fetchall(
         """
         SELECT analysis_id, repo_id, branch, commit_sha, commit_message, status, stage, progress, message, health_score, file_count, loc_total, created_at, finished_at, architecture_style
-        FROM analyses ORDER BY created_at DESC
+        FROM analyses WHERE coalesce(purpose, 'branch') = 'branch' ORDER BY created_at DESC
         """
     )
     latest: dict[str, dict] = {}
@@ -58,7 +58,7 @@ def _analyses_by_repo() -> tuple[dict[str, dict], dict[str, list[dict]]]:
 def list_repositories(user: dict) -> list[dict]:
     require(user, "repositories", "read")
     latest, branch_runs = _analyses_by_repo()
-    counts = {row["repo_id"]: int(row["c"]) for row in db.fetchall("SELECT repo_id, count(*) AS c FROM analyses GROUP BY repo_id")}
+    counts = {row["repo_id"]: int(row["c"]) for row in db.fetchall("SELECT repo_id, count(*) AS c FROM analyses WHERE coalesce(purpose, 'branch') = 'branch' GROUP BY repo_id")}
     rows = db.fetchall("SELECT * FROM repositories ORDER BY updated_at DESC")
     return [_payload(row, latest.get(row["repo_id"]), counts, branch_runs.get(row["repo_id"], [])) for row in rows]
 
@@ -70,7 +70,7 @@ def get_repository(user: dict, repo_id: str) -> dict:
         """
         SELECT analysis_id, branch, commit_sha, commit_message, status, stage, progress, message, health_score, file_count, loc_total,
                architecture_style, llm_used, started_by, created_at, started_at, finished_at
-        FROM analyses WHERE repo_id = ? ORDER BY created_at DESC
+        FROM analyses WHERE repo_id = ? AND coalesce(purpose, 'branch') = 'branch' ORDER BY created_at DESC
         """,
         [repo_id],
     )
@@ -266,8 +266,9 @@ def update_repository(user: dict, repo_id: str, body: dict) -> dict:
 def delete_repository(user: dict, repo_id: str) -> None:
     require(user, "repositories", "write")
     _row(repo_id)
-    from app.services import analyses
+    from app.services import analyses, pr_impact
 
+    pr_impact.delete_for_repo(user, repo_id)
     for row in db.fetchall("SELECT analysis_id FROM analyses WHERE repo_id = ?", [repo_id]):
         analyses.delete_analysis(user, row["analysis_id"])
     db.exec_sql("DELETE FROM repositories WHERE repo_id = ?", [repo_id])
@@ -311,7 +312,7 @@ def start_analysis(user: dict, repo_id: str, body: dict) -> dict:
 
 
 def _queue(user: dict, repo_id: str, branch: str, analysis_id: str) -> dict:
-    active = db.fetchone("SELECT analysis_id FROM analyses WHERE repo_id = ? AND branch = ? AND status IN ('queued', 'running')", [repo_id, branch])
+    active = db.fetchone("SELECT analysis_id FROM analyses WHERE repo_id = ? AND branch = ? AND status IN ('queued', 'running') AND coalesce(purpose, 'branch') = 'branch'", [repo_id, branch])
     if active:
         raise AppError(409, "An analysis of this branch is already running", extra={"analysis_id": active["analysis_id"]})
     now = db.now()

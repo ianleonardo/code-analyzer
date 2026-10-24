@@ -5,6 +5,9 @@ check_access()   tells whether the signed-in user can read the repository, anony
                  and when they cannot, whether signing in to the host would help (`auth_required`).
 list_branches()  lists branches (and the default branch) so an analysis can target master, release/* and so on.
 clone()          shallow-clones one branch with the user's credentials passed per command, never written to disk.
+list_pull_requests() / get_pull_request()
+                 open pull requests and the refs a PR impact run fetches (GitHub refs/pull/N/head, Bitbucket Server
+                 refs/pull-requests/N/from, Bitbucket Cloud the source branch of the source repository, forks included).
 """
 
 from __future__ import annotations
@@ -430,6 +433,144 @@ def _raise_for(response: httpx.Response, ref: RepoRef) -> None:
             extra={"status": "auth_required"},
         )
     raise AppError(502, f"{PROVIDER_LABELS[ref.provider]} returned HTTP {response.status_code} while listing branches")
+
+
+# --- pull requests ------------------------------------------------------------------------------------------------
+
+
+def _pr_api_url(ref: RepoRef) -> str:
+    base = _repo_api_url(ref)
+    return {GITHUB: f"{base}/pulls", BITBUCKET: f"{base}/pullrequests", BITBUCKET_SERVER: f"{base}/pull-requests"}.get(ref.provider, "")
+
+
+def _pr_payload(ref: RepoRef, item: dict) -> dict:
+    """One provider's pull request in a common shape. `head_fetch` says where the head commit can be fetched from."""
+    if ref.provider == GITHUB:
+        head, base = item.get("head") or {}, item.get("base") or {}
+        number = int(item.get("number") or 0)
+        return {
+            "number": number, "title": item.get("title") or "", "author": (item.get("user") or {}).get("login") or "",
+            "description": item.get("body") or "", "source_branch": head.get("ref") or "", "target_branch": base.get("ref") or "",
+            "head_sha": head.get("sha") or "", "base_sha": base.get("sha") or "", "url": item.get("html_url") or "",
+            "state": "draft" if item.get("draft") else (item.get("state") or ""), "updated_at": item.get("updated_at") or "",
+            "source_clone_url": ((head.get("repo") or {}).get("clone_url")) or ref.clone_url,
+            "head_fetch": {"url": ref.clone_url, "ref": f"refs/pull/{number}/head"},
+        }
+    if ref.provider == BITBUCKET:
+        source, destination = item.get("source") or {}, item.get("destination") or {}
+        full_name = ((source.get("repository") or {}).get("full_name")) or f"{ref.owner}/{ref.slug}"
+        source_url = f"https://bitbucket.org/{full_name}.git"
+        branch = ((source.get("branch") or {}).get("name")) or ""
+        return {
+            "number": int(item.get("id") or 0), "title": item.get("title") or "", "author": ((item.get("author") or {}).get("display_name")) or "",
+            "description": item.get("description") or "", "source_branch": branch, "target_branch": ((destination.get("branch") or {}).get("name")) or "",
+            "head_sha": ((source.get("commit") or {}).get("hash")) or "", "base_sha": ((destination.get("commit") or {}).get("hash")) or "",
+            "url": (((item.get("links") or {}).get("html") or {}).get("href")) or "", "state": (item.get("state") or "").lower(),
+            "updated_at": item.get("updated_on") or "", "source_clone_url": source_url,
+            "head_fetch": {"url": source_url, "ref": f"refs/heads/{branch}"},
+        }
+    if ref.provider == BITBUCKET_SERVER:
+        from_ref, to_ref = item.get("fromRef") or {}, item.get("toRef") or {}
+        number = int(item.get("id") or 0)
+        links = ((item.get("links") or {}).get("self")) or [{}]
+        updated = item.get("updatedDate")
+        return {
+            "number": number, "title": item.get("title") or "", "author": (((item.get("author") or {}).get("user")) or {}).get("displayName") or "",
+            "description": item.get("description") or "", "source_branch": from_ref.get("displayId") or "", "target_branch": to_ref.get("displayId") or "",
+            "head_sha": from_ref.get("latestCommit") or "", "base_sha": to_ref.get("latestCommit") or "", "url": (links[0] or {}).get("href") or "",
+            "state": (item.get("state") or "").lower(), "updated_at": str(updated or ""), "source_clone_url": ref.clone_url,
+            "head_fetch": {"url": ref.clone_url, "ref": f"refs/pull-requests/{number}/from"},
+        }
+    return {}
+
+
+PR_SCOPES = {
+    GITHUB: "Pull requests: Read (fine-grained token) or the repo scope (classic token)",
+    BITBUCKET: "Pull requests: Read (repository / workspace access token) or read:pullrequest:bitbucket (Atlassian API token)",
+    BITBUCKET_SERVER: "Repository read on the project (HTTP access token)",
+}
+
+
+def _host_message(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("detail") or "")[:300]
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            return str(errors[0].get("message") or "")[:300]
+        return str(body.get("message") or "")[:300]
+    return ""
+
+
+def _raise_pr(response: httpx.Response, ref: RepoRef, credential: Credential | None = None) -> None:
+    if response.status_code == 200:
+        return
+    label = PROVIDER_LABELS[ref.provider]
+    detail = _host_message(response)
+    said = f" {label} said: {detail}" if detail else ""
+    if response.status_code in (401, 403, 404) and credential is None:
+        raise AppError(403, f"Cannot read pull requests of {ref.name}: no {label} connection is saved for your user. Add one under Git connections.{said}",
+                       extra={"status": "auth_required"})
+    if response.status_code in (401, 403, 404):
+        raise AppError(
+            403,
+            f"Your {label} connection can read {ref.name} but was refused its pull requests (HTTP {response.status_code}).{said} "
+            f"Give the token the {PR_SCOPES[ref.provider]} permission and save it again under Git connections, "
+            f"or compare two branches instead (that only needs read access to the code).",
+            extra={"status": "insufficient_scope", "http_status": response.status_code},
+        )
+    raise AppError(502, f"{label} returned HTTP {response.status_code} while reading pull requests.{said}")
+
+
+def list_pull_requests(ref: RepoRef, credential: Credential | None, limit: int = 50) -> list[dict]:
+    """Open pull requests, newest first. Plain Git remotes have no pull requests: compare two branches instead."""
+    if ref.provider not in (GITHUB, BITBUCKET, BITBUCKET_SERVER):
+        return []
+    url = _pr_api_url(ref)
+    if ref.provider == GITHUB:
+        response = _get(url, credential, ref.provider, {"state": "open", "per_page": min(limit, 100), "sort": "updated", "direction": "desc"})
+        _raise_pr(response, ref, credential)
+        items = response.json() or []
+    elif ref.provider == BITBUCKET:
+        response = _get(url, credential, ref.provider, {"state": "OPEN", "pagelen": min(limit, 50)})
+        _raise_pr(response, ref, credential)
+        items = (response.json() or {}).get("values", [])
+    else:
+        response = _get(url, credential, ref.provider, {"state": "OPEN", "limit": min(limit, 100), "order": "NEWEST"})
+        _raise_pr(response, ref, credential)
+        items = (response.json() or {}).get("values", [])
+    return [_pr_payload(ref, item) for item in items[:limit]]
+
+
+def get_pull_request(ref: RepoRef, credential: Credential | None, number: int) -> dict:
+    if ref.provider not in (GITHUB, BITBUCKET, BITBUCKET_SERVER):
+        raise AppError(400, "This Git host has no pull requests; compare two branches instead.")
+    response = _get(f"{_pr_api_url(ref)}/{int(number)}", credential, ref.provider)
+    if response.status_code == 404 and credential is not None and "pull request" in _host_message(response).lower():
+        raise AppError(404, f"Pull request #{number} was not found in {ref.name}.")
+    _raise_pr(response, ref, credential)
+    return _pr_payload(ref, response.json() or {})
+
+
+def git_command(ref: RepoRef | None, credential: Credential | None, args: list[str], cwd: Path | None = None, timeout: int | None = None) -> subprocess.CompletedProcess:
+    """Runs git with the same credential hygiene as clone(): the token travels as a per-command header only."""
+    if not shutil.which("git"):
+        raise AppError(500, "git is not installed on the server")
+    command = ["git", *(_git_config(ref, credential) if ref is not None else ["-c", "credential.helper=", "-c", "core.askPass="]), *args]
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=timeout or config.git_timeout_seconds(), env=_git_env(), cwd=str(cwd) if cwd else None,
+                              encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired as exc:
+        raise AppError(504, "git took too long. Raise GIT_TIMEOUT_SECONDS for very large repositories.") from exc
+
+
+def scrub(text: str) -> str:
+    return _scrub(text)
 
 
 # --- clone --------------------------------------------------------------------------------------------------------

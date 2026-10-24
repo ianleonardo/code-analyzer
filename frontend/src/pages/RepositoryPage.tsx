@@ -113,11 +113,21 @@ export function RepositoryPage() {
           </span>
         }
         right={
-          canWrite && (
-            <button type="button" className="btn btn-danger" onClick={() => setDeleting("repo")}>
-              <span className="material-symbols-outlined icon-sm">delete</span>Delete repository
-            </button>
-          )
+          <>
+            {repo.source_type !== "zip" && (
+              <Link className="btn" to={`/impact?repo=${repo.repo_id}`} title="Impact of a pull request or of one branch against another">
+                <span className="material-symbols-outlined icon-sm">difference</span>PR impact
+              </Link>
+            )}
+            <Link className="btn" to={`/repositories/${repo.repo_id}/features`}>
+              <span className="material-symbols-outlined icon-sm">category</span>Features
+            </Link>
+            {canWrite && (
+              <button type="button" className="btn btn-danger" onClick={() => setDeleting("repo")}>
+                <span className="material-symbols-outlined icon-sm">delete</span>Delete repository
+              </button>
+            )}
+          </>
         }
       />
       <div className="space-y-4 p-4">

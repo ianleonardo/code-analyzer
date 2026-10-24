@@ -105,6 +105,7 @@ def settings_payload() -> dict:
         "llm_file_limit": settings.get("llm_file_limit", 40),
         "embedding_chunk_limit": settings.get("embedding_chunk_limit", 3000),
         "llm_catalog_limit": settings.get("llm_catalog_limit") if settings.get("llm_catalog_limit") is not None else 60,
+        "llm_pr_function_limit": settings.get("llm_pr_function_limit") if settings.get("llm_pr_function_limit") is not None else 25,
         "updated_at": settings.get("updated_at"),
         "providers": [provider_payload(row) for row in rows],
     }
@@ -122,13 +123,14 @@ def update_settings(user: dict, body: dict) -> dict:
     file_limit = _whole(body.get("llm_file_limit", current["llm_file_limit"]), "Files summarised by the LLM", 0, 2000)
     chunk_limit = _whole(body.get("embedding_chunk_limit", current["embedding_chunk_limit"]), "Embedded chunks", 0, 100000)
     catalog_limit = _whole(body.get("llm_catalog_limit", current["llm_catalog_limit"]), "Catalogue items explained by the LLM", 0, 5000)
+    pr_limit = _whole(body.get("llm_pr_function_limit", current["llm_pr_function_limit"]), "Changed functions explained per pull request", 0, 500)
     db.exec_sql(
         """
         UPDATE app_settings
-        SET active_provider = ?, global_system_prompt = ?, llm_file_limit = ?, embedding_chunk_limit = ?, llm_catalog_limit = ?, updated_at = ?
+        SET active_provider = ?, global_system_prompt = ?, llm_file_limit = ?, embedding_chunk_limit = ?, llm_catalog_limit = ?, llm_pr_function_limit = ?, updated_at = ?
         WHERE settings_id = 'default'
         """,
-        [active, prompt, file_limit, chunk_limit, catalog_limit, db.now()],
+        [active, prompt, file_limit, chunk_limit, catalog_limit, pr_limit, db.now()],
     )
     return settings_payload()
 
