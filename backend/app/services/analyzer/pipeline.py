@@ -3,10 +3,12 @@
 Stage 1  Ingestion           clone / extract / mount, hygiene gates, SHA-256 hashing, Merkle root
 Stage 2  Macro discovery     manifests, frameworks, containers, architecture style, docs vs manifest drift
 Stage 3  Micro parsing       symbols, imports, calls, complexity, line counts
-Stage 3b Code graph          IMPORTS / EXTENDS / IMPLEMENTS / INJECTS / CALLS, Tarjan SCC, PageRank
-Stage 3c Classification      layers, file roles, concept tags, quality audit, health score
-Stage 4  Synthesis           LLM summaries bottom-up over the condensed DAG (cached by content hash), C4 diagrams
-Stage 4b Indexing            content-addressed chunks + embeddings (reused when unchanged)
+Stage 4  Code graph          IMPORTS / EXTENDS / IMPLEMENTS / INJECTS / CALLS, Tarjan SCC, PageRank
+Stage 5  Classification      layers, file roles, concept tags, quality audit, health score
+Stage 6  Synthesis           LLM summaries bottom-up over the condensed DAG (cached by content hash), C4 diagrams
+Stage 7  Layer catalogue     endpoints, services, data, screens and shared items with cross-layer links
+Stage 8  Indexing            content-addressed chunks + embeddings (reused when unchanged)
+Stage 9  Saving results      everything above is written to the database
 """
 
 from __future__ import annotations
@@ -236,8 +238,8 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
     run.log(f"Parsed {len(parsed)} source files · {symbol_total} symbols · {sum(len(r.imports) for r in parsed.values())} import statements", 45)
     run.check()
 
-    # ---------------- Stage 3b: graph ----------------
-    run.log("Building the code context graph (IMPORTS, EXTENDS, IMPLEMENTS, INJECTS, CALLS)", 46, stage="Stage 3 · Code graph")
+    # ---------------- Stage 4: graph ----------------
+    run.log("Building the code context graph (IMPORTS, EXTENDS, IMPLEMENTS, INJECTS, CALLS)", 46, stage="Stage 4 · Code graph")
     go_modules = {}
     for item in workspace.files:
         if PurePosixPath(item.path).name == "go.mod" and item.text:
@@ -253,8 +255,8 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
     )
     run.check()
 
-    # ---------------- Stage 3c: classification & quality ----------------
-    run.log("Classifying layers, file roles and behavioural concepts", 56, stage="Stage 3 · Classification")
+    # ---------------- Stage 5: classification & quality ----------------
+    run.log("Classifying layers, file roles and behavioural concepts", 56, stage="Stage 5 · Classification")
     container_paths = [c.path for c in macro_result.containers]
     containers_by_file = {item.path: _container_of(item.path, container_paths) for item in workspace.files}
     entry_points = set(macro_result.entry_points)
@@ -293,8 +295,8 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
     run.log(f"Quality audit: {len(concerns)} concern(s) · health score {metrics['health_score']}/100", 66)
     run.check()
 
-    # ---------------- Stage 4: synthesis ----------------
-    run.log("Stage 4: semantic synthesis (bottom-up over the condensed DAG)", 67, stage="Stage 4 · Synthesis")
+    # ---------------- Stage 6: synthesis ----------------
+    run.log("Stage 6: semantic synthesis (bottom-up over the condensed DAG)", 67, stage="Stage 6 · Synthesis")
     settings = llm_settings.settings_row()
     llm_ready = llm.configured()
     cache = _summary_cache(repo["repo_id"]) if llm_ready else {}
@@ -328,8 +330,8 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
     run.log(f"Synthesis complete · {produced} LLM file summaries · C4 diagrams (context, container, {len(diagrams['components'])} component, dynamic) validated", 80)
     run.check()
 
-    # ---------------- Stage 4a: layer catalogue ----------------
-    run.log("Stage 4: layer catalogue — endpoints, services, data, screens and shared items with cross-layer links", 81, stage="Stage 4 · Layer catalogue")
+    # ---------------- Stage 7: layer catalogue ----------------
+    run.log("Stage 7: layer catalogue — endpoints, services, data, screens and shared items with cross-layer links", 81, stage="Stage 7 · Layer catalogue")
     from app.services import catalog as catalog_service
 
     catalog_result = catalog_service.from_pipeline(files, macro_result, graph_result, lambda m: run.log(m, None))
@@ -339,8 +341,8 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
         run.log(f"Layer catalogue: {catalog_explained} item(s) explained by {llm.provider_name()} (purpose and business rules)", 84)
     run.check()
 
-    # ---------------- Stage 4b: indexing ----------------
-    run.log("Indexing content-addressed chunks for Chat with Analyst", 85, stage="Stage 4 · Indexing")
+    # ---------------- Stage 8: indexing ----------------
+    run.log("Indexing content-addressed chunks for Chat with Analyst", 85, stage="Stage 8 · Indexing")
     chunk_rows = _chunks(files, symbols_by_file) + catalog_service.chunk_rows(catalog_result)
     signature = llm.embedding_signature()
     embedded = reused = 0
@@ -353,7 +355,7 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
     run.check()
 
     # ---------------- persist ----------------
-    run.log("Persisting the analysis for offline viewing", 96, stage="Persisting")
+    run.log("Stage 9: saving the analysis to the database for offline viewing", 96, stage="Stage 9 · Saving results")
     _persist(analysis_id, macro_result, files, symbols, graph_result, concerns, chunk_rows)
     catalog_service.persist(analysis_id, catalog_result)
     layer_counts: dict[str, int] = {}
@@ -424,7 +426,22 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
         ],
     )
     run.stage = "Completed"
+    _feature_catalogue(run, repo["repo_id"], analysis_id, analysis.get("started_by") or "system")
     run.log(f"Analysis completed in {stats['duration_seconds']}s · health {metrics['health_score']}/100", 100)
+
+
+def _feature_catalogue(run: Run, repo_id: str, analysis_id: str, user_id: str) -> None:
+    """Keeps the repository's feature catalogue (used by pull-request impact) up to date. Never fails the analysis."""
+    from app.services import features
+
+    try:
+        result = features.auto_build(repo_id, analysis_id, user_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("Automatic feature catalogue failed for %s", analysis_id)
+        run.log("Feature catalogue could not be rebuilt automatically; use Propose features on the Features page", 100, "warn")
+        return
+    if result is not None:
+        run.log(f"Feature catalogue rebuilt from {result['entries']} entry point(s): {result['created']} proposed, {result['kept']} confirmed kept", 100)
 
 
 def _edge_kinds(edges) -> dict[str, int]:

@@ -26,10 +26,15 @@ const TABS = [
   { key: "dependencies", icon: "inventory_2", label: "Dependencies" },
   { key: "chat", icon: "forum", label: "Chat with Analyst" },
 ] as const;
-const STAGES = ["Stage 1 · Ingestion", "Stage 2 · Macro discovery", "Stage 3 · Micro parsing", "Stage 3 · Code graph", "Stage 3 · Classification", "Stage 4 · Synthesis", "Stage 4 · Layer catalogue", "Stage 4 · Indexing", "Persisting"];
+const STAGES = ["Ingestion", "Macro discovery", "Micro parsing", "Code graph", "Classification", "Synthesis", "Layer catalogue", "Indexing", "Saving results"];
+/** Position of a stage name in STAGES; also understands the older labels ("Stage 3 · Code graph", "Persisting"). */
+function stageIndex(stage: string): number {
+  const name = stage.includes("·") ? stage.split("·").pop()!.trim() : stage === "Persisting" ? "Saving results" : stage;
+  return STAGES.indexOf(name);
+}
 
 function RunView({ analysis, events, onCancel, canWrite }: { analysis: Analysis; events: AnalysisEvent[]; onCancel: () => void; canWrite: boolean }) {
-  const current = STAGES.indexOf(analysis.stage);
+  const current = stageIndex(analysis.stage);
   return (
     <div className="mx-auto max-w-5xl space-y-4 p-4">
       <div className="panel">
@@ -48,7 +53,7 @@ function RunView({ analysis, events, onCancel, canWrite }: { analysis: Analysis;
             {STAGES.map((stage, index) => (
               <li key={stage} className={`border px-2 py-1.5 font-mono text-micro ${index < current ? "border-ok/40 text-ok" : index === current ? "border-primary text-primary" : "border-line text-faint"}`}>
                 <span className="material-symbols-outlined icon-sm mr-1">{index < current ? "check" : index === current ? "progress_activity" : "radio_button_unchecked"}</span>
-                {stage}
+                {index + 1} · {stage}
               </li>
             ))}
           </ol>

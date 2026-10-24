@@ -144,10 +144,10 @@ export function Shell() {
           <RailLink to="/" icon="monitoring" label="Pulse" end />
           {can(user, "repositories") && <RailLink to="/repositories" icon="folder_data" label="Repos" />}
           {can(user, "repositories") && <RailLink to="/analyses" icon="query_stats" label="Runs" />}
-          {can(user, "repositories") && <RailLink to="/impact" icon="difference" label="Impact" />}
           {can(user, "insights") && can(user, "repositories") && <RailLink to="/compare" icon="compare_arrows" label="Compare" />}
-          {can(user, "insights") && can(user, "repositories") && <RailLink to="/chat" icon="forum" label="Chat" />}
+          {can(user, "repositories") && <RailLink to="/impact" icon="difference" label="Impact" />}
           <div className="flex-1" />
+          {can(user, "insights") && can(user, "repositories") && <RailLink to="/chat" icon="forum" label="Chat" />}
           <RailLink to="/git-connections" icon="key" label="Git" />
           {can(user, "settings") && <RailLink to="/settings" icon="tune" label="Admin" />}
         </nav>
@@ -176,7 +176,6 @@ export function Shell() {
             <span className="text-muted">ANALYSIS ENGINE: IDLE · DETERMINISTIC GATING READY</span>
           )}
           <span className="ml-auto hidden items-center gap-3 text-faint lg:flex">
-            <span>DB: <span className="text-ink uppercase">{dock?.database.engine ?? "—"}</span> v{dock?.database.schema_version ?? "?"}</span>
             <span>LLM: <span className={dock?.llm_configured ? "text-ok" : "text-faint"}>{dock?.llm_configured ? dock.llm_provider : "not configured"}</span></span>
             <span>EMBEDDINGS: <span className={dock?.embedding_configured ? "text-ok" : "text-faint"}>{dock?.embedding_configured ? "on" : "BM25 only"}</span></span>
             {info && <SourceBadge source={info.source} />}

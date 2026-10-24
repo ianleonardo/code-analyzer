@@ -28,7 +28,7 @@ from app import config, db
 from app.errors import AppError
 from app.permissions import require
 from app.services import features as features_service
-from app.services import git_credentials, git_hosts, jobs, llm, llm_settings, pr_logic
+from app.services import git_credentials, git_hosts, jobs, listing, llm, llm_settings, pr_logic
 from app.services.analyzer import config_impact, diff, impact
 from app.services.analyzer.languages import classify_path
 
@@ -524,18 +524,15 @@ def _brief(row: dict) -> dict:
     return {k: row.get(k) for k in RUN_FIELDS}
 
 
-def list_runs(user: dict, repo_id: str = "", limit: int = 100) -> list[dict]:
-    require(user, "repositories", "read")
-    where, params = "", []
+def _run_filters(repo_id: str, date_from: str, date_to: str, required: bool = False) -> tuple[str, list]:
+    where, params = listing.date_range(date_from, date_to, "r.created_at", required)
     if repo_id:
-        where, params = "WHERE r.repo_id = ?", [repo_id]
-    rows = db.fetchall(
-        f"""
-        SELECT r.*, repo.name AS repo_name, p.number AS pr_number, p.url AS pr_url FROM pr_impact_runs r JOIN repositories repo ON repo.repo_id = r.repo_id
-        LEFT JOIN pull_requests p ON p.pr_id = r.pr_id {where} ORDER BY r.created_at DESC LIMIT {max(1, min(int(limit), 500))}
-        """,
-        params,
-    )
+        where.insert(0, "r.repo_id = ?")
+        params.insert(0, repo_id)
+    return (f"WHERE {' AND '.join(where)}" if where else ""), params
+
+
+def _run_briefs(rows: list[dict]) -> list[dict]:
     out = []
     for row in rows:
         brief = _brief(row)
@@ -543,6 +540,42 @@ def list_runs(user: dict, repo_id: str = "", limit: int = 100) -> list[dict]:
         brief.update(repo_name=row["repo_name"], pr_number=row["pr_number"], pr_url=row["pr_url"], stats=stats)
         out.append(brief)
     return out
+
+
+_RUN_LIST_SQL = """
+    SELECT r.*, repo.name AS repo_name, p.number AS pr_number, p.url AS pr_url FROM pr_impact_runs r JOIN repositories repo ON repo.repo_id = r.repo_id
+    LEFT JOIN pull_requests p ON p.pr_id = r.pr_id {where} ORDER BY r.created_at DESC LIMIT {limit} OFFSET {offset}
+"""
+
+
+def list_runs(user: dict, repo_id: str = "", limit: int = 100) -> list[dict]:
+    require(user, "repositories", "read")
+    where, params = _run_filters(repo_id, "", "")
+    rows = db.fetchall(_RUN_LIST_SQL.format(where=where, limit=max(1, min(int(limit), 500)), offset=0), params)
+    return _run_briefs(rows)
+
+
+def page_runs(user: dict, repo_id: str = "", page: int = 1, page_size: int = listing.PAGE_SIZE, date_from: str = "", date_to: str = "") -> dict:
+    """One page of impact runs (newest first) with the total, optionally limited to a date range."""
+    require(user, "repositories", "read")
+    number, size, offset = listing.page_bounds(page, page_size)
+    where, params = _run_filters(repo_id, date_from, date_to)
+    total = int(db.scalar(f"SELECT count(*) FROM pr_impact_runs r JOIN repositories repo ON repo.repo_id = r.repo_id {where}", params) or 0)
+    rows = db.fetchall(_RUN_LIST_SQL.format(where=where, limit=size, offset=offset), params)
+    return {"items": _run_briefs(rows), "total": total, "page": number, "page_size": size}
+
+
+def purge_runs(user: dict, body: dict) -> dict:
+    """Deletes impact runs created in [date_from, date_to). Queued/running runs are kept. dry_run only counts."""
+    require(user, "repositories", "write")
+    where, params = _run_filters(str(body.get("repo_id") or ""), str(body.get("date_from") or ""), str(body.get("date_to") or ""), required=True)
+    rows = db.fetchall(f"SELECT r.run_id, r.status FROM pr_impact_runs r {where}", params)
+    active = [r for r in rows if r["status"] in ("queued", "running")]
+    targets = [r["run_id"] for r in rows if r["status"] not in ("queued", "running")]
+    if not body.get("dry_run"):
+        for run_id in targets:
+            delete_run(user, run_id)
+    return {"matched": len(targets), "deleted": 0 if body.get("dry_run") else len(targets), "skipped_active": len(active), "dry_run": bool(body.get("dry_run"))}
 
 
 def get_run(user: dict, run_id: str) -> dict:
@@ -665,3 +698,270 @@ def delete_for_repo(user: dict, repo_id: str) -> None:
         delete_run(user, row["run_id"])
     db.exec_sql("DELETE FROM pull_requests WHERE repo_id = ?", [repo_id])
     features_service.delete_for_repo(repo_id)
+
+
+# --- downloadable report ------------------------------------------------------------------------------------------
+
+REPORT_LIMIT = 150
+
+
+def _cell(value) -> str:
+    """Markdown-table-safe text."""
+    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def report_filename(run: dict, extension: str) -> str:
+    label = f"PR-{run['pull_request']['number']}" if run.get("pull_request") else (run.get("head_ref") or "change")
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in label).strip("-")[:60] or "change"
+    return f"IMPACT-{safe}-{run['run_id'][:8]}.{extension}"
+
+
+def run_markdown(user: dict, run_id: str) -> str:
+    """The impact run as a Markdown report: summary, risk, changed files and symbols, blast radius, entry points,
+    configuration, tests, structure, dependencies, concerns, reviewers and limits."""
+    run = get_run(user, run_id)
+    if run["status"] != "completed":
+        raise AppError(409, f"The impact run is {run['status']}; a report is available once it has completed.")
+    r = run.get("result") or {}
+    story = run.get("narrative") or {}
+    stats = r.get("stats") or {}
+    risk = r.get("risk") or {}
+    pr = run.get("pull_request") or r.get("pr")
+    repo = run.get("repo") or {}
+    lines: list[str] = []
+    add = lines.append
+
+    def more(items: list, shown: int, noun: str) -> None:
+        if len(items) > shown:
+            add(f"- … and {len(items) - shown} more {noun} (see the run in Code Analyzer)")
+
+    add(f"# Pull-Request Impact Report — {run.get('title') or run['head_ref'] + ' → ' + run['base_ref']}")
+    add("")
+    add(f"- **Repository:** {repo.get('name', '')}")
+    if pr:
+        add(f"- **Pull request:** #{pr.get('number')} {pr.get('title') or ''}" + (f" ({pr['url']})" if pr.get("url") else ""))
+        if pr.get("author"):
+            add(f"- **Author:** {pr['author']}")
+    add(f"- **Change:** `{run['head_ref']}` → `{run['base_ref']}` · merge-base `{(run.get('merge_base_sha') or '')[:10]}` · head `{(run.get('head_sha') or '')[:10]}`")
+    add(f"- **Risk:** **{risk.get('label', run.get('risk_label', ''))}** ({risk.get('score', run.get('risk'))})")
+    add(f"- **Size:** {stats.get('files', 0)} file(s), +{stats.get('additions', 0)} / −{stats.get('deletions', 0)} lines, {stats.get('symbols', 0)} changed symbol(s), "
+        f"{stats.get('impacted', 0)} impacted file(s), {stats.get('entry_points', 0)} entry point(s)")
+    add(f"- **Analysed:** {str(run.get('finished_at') or run.get('created_at') or '')[:19].replace('T', ' ')} UTC by {run.get('started_by_name', '')}"
+        f" · narrative by {'LLM' if story.get('source') == 'llm' else 'rules'}")
+    add("")
+
+    add("## Summary")
+    add("")
+    add(str(story.get("summary") or "").strip() or "No summary.")
+    add("")
+    if story.get("risk_explanation"):
+        add(f"**Why this risk level:** {story['risk_explanation']}")
+        add("")
+    if story.get("description_drift"):
+        add("### Description vs. diff")
+        add("")
+        for item in story["description_drift"]:
+            add(f"- {item}")
+        add("")
+    if story.get("review_checklist"):
+        add("## Review Checklist")
+        add("")
+        for item in story["review_checklist"]:
+            add(f"- [ ] {item}")
+        add("")
+    if story.get("features"):
+        add("## Features Affected")
+        add("")
+        for f in story["features"]:
+            add(f"- **{f.get('feature')}:** {f.get('summary')}")
+        add("")
+
+    add("## Risk Breakdown")
+    add("")
+    if risk.get("overrides"):
+        add("Raised to at least HIGH because: " + "; ".join(risk["overrides"]) + ".")
+        add("")
+    add("| Factor | Value | Weight | Contribution | Detail |")
+    add("| :--- | ---: | ---: | ---: | :--- |")
+    for f in risk.get("factors") or []:
+        add(f"| {_cell(str(f.get('factor', '')).replace('_', ' '))} | {f.get('value')} | {f.get('weight')} | {f.get('contribution')} | {_cell(f.get('detail'))} |")
+    add("")
+    if risk.get("hotspots"):
+        add("**Hotspots:** " + ", ".join(f"`{h.get('path') if isinstance(h, dict) else h}`" for h in risk["hotspots"][:20]))
+        add("")
+
+    files = r.get("files") or []
+    add(f"## Changed Files ({len(files)})")
+    add("")
+    if files:
+        add("| File | Status | +/− | Layer | Kinds |")
+        add("| :--- | :---: | ---: | :--- | :--- |")
+        for f in files[:REPORT_LIMIT]:
+            name = f"{f.get('old_path')} → {f['path']}" if f.get("old_path") and f.get("old_path") != f["path"] else f["path"]
+            flag = " (sensitive)" if f.get("sensitive") else ""
+            add(f"| `{_cell(name)}`{flag} | {f.get('status')} | +{f.get('additions', 0)} / −{f.get('deletions', 0)} | {_cell(f.get('layer'))} | {_cell(', '.join(f.get('change_kinds') or []))} |")
+        more(files, REPORT_LIMIT, "file(s)")
+        add("")
+
+    symbols = run.get("symbols") or []
+    if symbols:
+        add(f"## Changed Symbols ({len(symbols)})")
+        add("")
+        add("| Symbol | Change | Kind | File | Flags |")
+        add("| :--- | :---: | :--- | :--- | :--- |")
+        for s in symbols[:REPORT_LIMIT]:
+            add(f"| `{_cell(s.get('qualified_name'))}` | {s.get('change_type')} | {s.get('kind')} | `{_cell(s.get('path'))}:{s.get('line_start')}` | {_cell(', '.join(s.get('flags') or []))} |")
+        more(symbols, REPORT_LIMIT, "symbol(s)")
+        add("")
+        explained = [s for s in symbols if (s.get("logic") or {}).get("summary")]
+        if explained:
+            add("### Changed Logic")
+            add("")
+            for s in explained[:60]:
+                logic = s["logic"]
+                add(f"#### `{s.get('qualified_name')}` ({s.get('change_type')})")
+                add("")
+                add(logic.get("summary", ""))
+                for rule in logic.get("rules_changed") or []:
+                    add(f"- Rule: {rule.get('before') or '—'} → {rule.get('after') or '—'}")
+                for effect in logic.get("side_effects") or []:
+                    add(f"- Side effect ({effect.get('kind')}, {effect.get('verified')}): {effect.get('detail')}")
+                for note in logic.get("risk_notes") or []:
+                    add(f"- Risk: {note}")
+                for note in logic.get("test_focus") or []:
+                    add(f"- Test: {note}")
+                add("")
+
+    entries = r.get("entry_points") or []
+    if entries:
+        add(f"## Affected Entry Points ({len(entries)})")
+        add("")
+        add("| Entry point | Kind | Reach | Via | Location |")
+        add("| :--- | :--- | :--- | :--- | :--- |")
+        for e in entries[:REPORT_LIMIT]:
+            name = e.get("name", "") + (" (BREAKING)" if e.get("breaking") else "")
+            add(f"| `{_cell(name)}` | {_cell(e.get('kind'))} | {_cell(e.get('reach'))} (depth {e.get('depth')}) | `{_cell(e.get('via'))}` | `{_cell(e.get('path'))}:{e.get('line')}` |")
+        more(entries, REPORT_LIMIT, "entry point(s)")
+        add("")
+        contracts = [e for e in entries if e.get("contract_changes")]
+        if contracts:
+            add("### Contract Changes")
+            add("")
+            for e in contracts[:60]:
+                for change in e["contract_changes"]:
+                    add(f"- `{e['name']}`: {change.get('text', '')}" + (" **(breaking)**" if change.get("breaking") else ""))
+            add("")
+
+    impacted = r.get("impacted") or []
+    if impacted:
+        add(f"## Blast Radius — Impacted Files ({len(impacted)})")
+        add("")
+        add("| File | Depth | Confidence | Via | Reason |")
+        add("| :--- | ---: | :--- | :--- | :--- |")
+        for i in impacted[:REPORT_LIMIT]:
+            add(f"| `{_cell(i.get('path'))}` | {i.get('depth')} | {i.get('confidence')} | `{_cell(i.get('via_path'))}` | {_cell(i.get('reason'))} |")
+        more(impacted, REPORT_LIMIT, "impacted file(s)")
+        add("")
+
+    config = r.get("config") or {}
+    findings, keys = config.get("findings") or [], config.get("keys") or []
+    if findings or keys:
+        add("## Configuration")
+        add("")
+        if findings:
+            add(f"### Findings ({len(findings)})")
+            add("")
+            for f in findings[:REPORT_LIMIT]:
+                where = " · ".join(x for x in (f.get("environment"), f.get("path")) if x)
+                add(f"- **[{str(f.get('severity', '')).upper()}]** {f.get('message')}" + (f" ({where})" if where else ""))
+            add("")
+        if keys:
+            add(f"### Changed Keys ({len(keys)})")
+            add("")
+            add("| Key | Environment | Change | Before | After | Read by |")
+            add("| :--- | :--- | :---: | :--- | :--- | :--- |")
+            for k in keys[:REPORT_LIMIT]:
+                readers = ", ".join(str(x.get("path") if isinstance(x, dict) else x) for x in (k.get("readers") or [])[:4])
+                add(f"| `{_cell(k.get('key'))}` | {_cell(k.get('environment'))} | {k.get('change')} | `{_cell(k.get('before'))}` | `{_cell(k.get('after'))}` | {_cell(readers)} |")
+            more(keys, REPORT_LIMIT, "key(s)")
+            add("")
+        if config.get("external_config"):
+            add("Configuration outside the repository (not analysed): " + ", ".join(config["external_config"]))
+            add("")
+
+    tests = r.get("tests") or {}
+    if tests:
+        add("## Tests")
+        add("")
+        add(f"- Changed functions: {tests.get('functions', 0)} · without any test reaching them: {len(tests.get('gaps') or [])}")
+        if tests.get("tests"):
+            add("- Tests to run: " + ", ".join(f"`{t.get('path')}`" for t in tests["tests"][:40]))
+        add("")
+        if tests.get("gaps"):
+            add("### Test Gaps")
+            add("")
+            for g in tests["gaps"][:REPORT_LIMIT]:
+                add(f"- `{g.get('symbol')}` ({g.get('change_type')}) in `{g.get('path')}`")
+            add("")
+
+    graph = r.get("graph") or {}
+    if any(graph.get(k) for k in ("added_count", "removed_count", "layer_violations", "new_cycles", "resolved_cycles", "behaviour")):
+        add("## Structure")
+        add("")
+        add(f"- Dependency edges: +{graph.get('added_count', 0)} / −{graph.get('removed_count', 0)}")
+        for v in graph.get("layer_violations") or []:
+            add(f"- New layer violation: {v.get('source', v) if isinstance(v, dict) else v}" + (f" → {v.get('target')}" if isinstance(v, dict) and v.get("target") else ""))
+        for c in graph.get("new_cycles") or []:
+            add(f"- New cycle: {' → '.join(c) if isinstance(c, list) else c}")
+        for c in graph.get("resolved_cycles") or []:
+            add(f"- Resolved cycle: {' → '.join(c) if isinstance(c, list) else c}")
+        for b in (graph.get("behaviour") or [])[:40]:
+            add(f"- Behaviour {b.get('change')}: `{b.get('tag')}` in `{b.get('path')}`")
+        add("")
+
+    deps = r.get("dependencies") or {}
+    if any(deps.get(k) for k in ("added", "removed", "changed")):
+        add("## Dependencies")
+        add("")
+        for d in deps.get("added") or []:
+            add(f"- Added `{d.get('name')}` {d.get('version') or d.get('right') or ''}".rstrip())
+        for d in deps.get("removed") or []:
+            add(f"- Removed `{d.get('name')}`")
+        for d in deps.get("changed") or []:
+            add(f"- `{d.get('name')}` {d.get('left') or d.get('before') or ''} → {d.get('right') or d.get('after') or ''}" + (" (major)" if d.get("major") else ""))
+        add("")
+
+    concerns = r.get("concerns") or {}
+    new_concerns, resolved = concerns.get("new") or [], concerns.get("resolved") or []
+    if new_concerns or resolved:
+        add("## Code-Quality Concerns")
+        add("")
+        for label, items in (("New", new_concerns), ("Resolved", resolved)):
+            if items:
+                add(f"### {label} ({len(items)})")
+                add("")
+                for c in items[:REPORT_LIMIT]:
+                    add(f"- **[{str(c.get('severity', '')).upper()}]** {c.get('category')}: {c.get('title')}" + (f" (`{c['path']}`)" if c.get("path") else ""))
+                add("")
+
+    reviewers = r.get("reviewers") or []
+    if reviewers:
+        add("## Suggested Reviewers")
+        add("")
+        for p in reviewers[:15]:
+            add(f"- **{p.get('name')}** ({p.get('source')}) — {len(p.get('files') or [])} file(s)")
+        add("")
+
+    if r.get("limits"):
+        add("## Limits of This Analysis")
+        add("")
+        for item in r["limits"]:
+            add(f"- {item}")
+        add("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def run_pdf(user: dict, run_id: str) -> bytes:
+    from app.services import md_pdf
+
+    return md_pdf.render(run_markdown(user, run_id), "Code Analyzer Pull-Request Impact Report")

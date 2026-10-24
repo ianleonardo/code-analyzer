@@ -72,11 +72,11 @@ export function FeaturesPage() {
       <PageHeader
         icon="category"
         title={<span>Feature catalogue <span className="font-mono text-muted">· {repo?.name}</span></span>}
-        subtitle="User-facing capabilities mapped to endpoints, jobs, listeners and screens. PR impact reports group affected entry points by these features."
+        subtitle="User-facing capabilities mapped to endpoints, jobs, listeners and screens, built automatically after each analysis of the default branch. Confirm or edit proposals; confirmed features are never replaced. PR impact reports group affected entry points by these features."
         right={
           <>
             <Link className="btn" to={`/impact?repo=${repoId}`}><span className="material-symbols-outlined icon-sm">difference</span>PR impact</Link>
-            {canWrite && <button type="button" className="btn" disabled={busy} onClick={() => void suggest()}><span className="material-symbols-outlined icon-sm">auto_awesome</span>{busy ? "Proposing…" : "Propose features"}</button>}
+            {canWrite && <button type="button" className="btn" title="Re-propose features from the latest analysis; confirmed features are kept" disabled={busy} onClick={() => void suggest()}><span className="material-symbols-outlined icon-sm">refresh</span>{busy ? "Rebuilding…" : "Rebuild now"}</button>}
             {canWrite && <button type="button" className="btn btn-primary" onClick={() => setDraft({ name: "", description: "", patterns: [{ type: "route", value: "" }], confirmed: true })}><span className="material-symbols-outlined icon-sm">add</span>New feature</button>}
           </>
         }
@@ -84,12 +84,12 @@ export function FeaturesPage() {
       <div className="space-y-4 p-4">
         <ErrorNote message={error} />
         {!data && !error && <Spinner label="Loading…" />}
-        {data && !data.analysis_id && <section className="panel"><Empty icon="query_stats" title="Analyse the repository first">Features are proposed from the entry points of a completed analysis.</Empty></section>}
+        {data && !data.analysis_id && <section className="panel"><Empty icon="query_stats" title="Analyse the repository first">The feature catalogue is built automatically once an analysis completes.</Empty></section>}
         {data && data.analysis_id && (
           <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
             <section className="panel">
               <div className="panel-head"><span>Features · {data.features.length}</span><span>{data.entry_total - data.unassigned.length} of {data.entry_total} entry points assigned</span></div>
-              {!data.features.length && <Empty icon="category" title="No features yet">Propose features (LLM when configured, otherwise grouped by route and folder), then confirm or edit them.</Empty>}
+              {!data.features.length && <Empty icon="category" title="No features found">The latest analysis has no endpoints, jobs, listeners or screens to group. Add features by hand with New feature.</Empty>}
               {data.features.map((f) => (
                 <div key={f.feature_id} className="border-b border-line/60 px-3 py-2">
                   <div className="flex flex-wrap items-center gap-2">

@@ -58,71 +58,40 @@ export function DashboardPage() {
           <Kpi label="Comparisons · chats" value={`${data?.comparisons ?? 0} · ${data?.chats ?? 0}`} />
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-          <section className="panel">
-            <div className="panel-head">
-              <span>Recent analysis runs</span>
-              <Link to="/analyses" className="link normal-case">All runs</Link>
+        <section className="panel">
+          <div className="panel-head">
+            <span>Recent analysis runs</span>
+            <Link to="/analyses" className="link normal-case">All runs</Link>
+          </div>
+          <table className="w-full">
+            <thead className="table-head">
+              <tr><th>Repository</th><th>Branch · commit</th><th>Status</th><th>Health</th><th>Style</th><th className="text-right">Files</th><th className="text-right">LOC</th><th>When</th></tr>
+            </thead>
+            <tbody>
+              {(data?.recent ?? []).map((row) => (
+                <tr key={row.analysis_id} className="table-row">
+                  <td>
+                    <Link to={`/analyses/${row.analysis_id}`} className="font-mono text-code hover:text-primary">{row.repo_name}</Link>
+                    <div><SourceBadge source={row.source_type ?? "git"} /></div>
+                  </td>
+                  <td className="font-mono text-code"><span className="text-primary">{row.branch || "—"}</span> <ShortSha sha={row.commit_sha} /></td>
+                  <td><StatusBadge status={row.status} progress={row.progress} /></td>
+                  <td><HealthGauge score={row.health_score} size={30} /></td>
+                  <td className="text-body-sm text-muted">{row.architecture_style || "—"}</td>
+                  <td className="text-right font-mono tnum">{compact(row.file_count)}</td>
+                  <td className="text-right font-mono tnum">{compact(row.loc_total)}</td>
+                  <td className="font-mono text-micro text-faint">{timeAgo(row.finished_at ?? row.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!data?.recent?.length && (
+            <div className="p-8 text-center text-muted">
+              No analyses yet.{" "}
+              {canWrite && <button type="button" className="link" onClick={() => setAdding(true)}>Add a repository</button>}
             </div>
-            <table className="w-full">
-              <thead className="table-head">
-                <tr><th>Repository</th><th>Branch · commit</th><th>Status</th><th>Health</th><th>Style</th><th className="text-right">Files</th><th className="text-right">LOC</th><th>When</th></tr>
-              </thead>
-              <tbody>
-                {(data?.recent ?? []).map((row) => (
-                  <tr key={row.analysis_id} className="table-row">
-                    <td>
-                      <Link to={`/analyses/${row.analysis_id}`} className="font-mono text-code hover:text-primary">{row.repo_name}</Link>
-                      <div><SourceBadge source={row.source_type ?? "git"} /></div>
-                    </td>
-                    <td className="font-mono text-code"><span className="text-primary">{row.branch || "—"}</span> <ShortSha sha={row.commit_sha} /></td>
-                    <td><StatusBadge status={row.status} progress={row.progress} /></td>
-                    <td><HealthGauge score={row.health_score} size={30} /></td>
-                    <td className="text-body-sm text-muted">{row.architecture_style || "—"}</td>
-                    <td className="text-right font-mono tnum">{compact(row.file_count)}</td>
-                    <td className="text-right font-mono tnum">{compact(row.loc_total)}</td>
-                    <td className="font-mono text-micro text-faint">{timeAgo(row.finished_at ?? row.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!data?.recent?.length && (
-              <div className="p-8 text-center text-muted">
-                No analyses yet.{" "}
-                {canWrite && <button type="button" className="link" onClick={() => setAdding(true)}>Add a repository</button>}
-              </div>
-            )}
-          </section>
-          <section className="space-y-4">
-            <div className="panel">
-              <div className="panel-head"><span>Engine status</span></div>
-              <dl className="space-y-2 p-3 font-mono text-code">
-                <div className="flex justify-between"><dt className="text-faint">Database</dt><dd className="uppercase">{data?.database.engine ?? "—"} · schema v{data?.database.schema_version}</dd></div>
-                <div className="flex justify-between"><dt className="text-faint">LLM</dt><dd className={data?.llm_configured ? "text-ok" : "text-warning"}>{data?.llm_configured ? data.llm_provider : "not configured"}</dd></div>
-                <div className="flex justify-between"><dt className="text-faint">Embeddings</dt><dd className={data?.embedding_configured ? "text-ok" : "text-muted"}>{data?.embedding_configured ? "enabled" : "BM25 only"}</dd></div>
-                <div className="flex justify-between"><dt className="text-faint">Parsing</dt><dd>AST + pattern extractors</dd></div>
-              </dl>
-              {!data?.llm_configured && can(user, "settings", "write") && (
-                <div className="border-t border-line p-3 text-body-md text-muted">
-                  Deterministic analysis works without an LLM. <Link to="/settings/llm" className="link">Configure Gemini or Spirare</Link> for summaries and full chat answers.
-                </div>
-              )}
-            </div>
-            <div className="panel">
-              <div className="panel-head"><span>Active runs</span></div>
-              <div className="p-3 space-y-3">
-                {(data?.running ?? []).map((job) => (
-                  <Link key={job.analysis_id} to={`/analyses/${job.analysis_id}`} className="block">
-                    <div className="flex justify-between font-mono text-code"><span className="truncate">{job.repo_name}@{job.branch || "-"}</span><span className="text-primary tnum">{Math.round(job.progress)}%</span></div>
-                    <div className="mt-1 h-1.5 bg-elevated"><div className="h-full bg-primary stripes" style={{ width: `${job.progress}%` }} /></div>
-                    <div className="mt-1 truncate font-mono text-micro text-faint">{job.stage} · {job.message}</div>
-                  </Link>
-                ))}
-                {!data?.running?.length && <p className="text-muted text-body-md">Idle.</p>}
-              </div>
-            </div>
-          </section>
-        </div>
+          )}
+        </section>
       </div>
       {adding && <AddRepositoryDialog onClose={() => setAdding(false)} />}
     </div>

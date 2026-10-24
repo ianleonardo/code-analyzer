@@ -3,10 +3,14 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, api, errorText, formatDateTime, post, timeAgo } from "../../api";
 import { useAuth } from "../../auth";
 import { BranchPicker } from "../../components/BranchPicker";
-import { Empty, ErrorNote, PageHeader, Select, ShortSha, SourceBadge, Spinner, StatusBadge } from "../../components/ui";
+import { RepoPicker } from "../../components/RepoPicker";
+import { DateRangeFilter, type Page, Pagination, PurgeDialog, dayToIso } from "../../components/ListTools";
+import { Empty, ErrorNote, PageHeader, ShortSha, SourceBadge, Spinner, StatusBadge } from "../../components/ui";
 import { can } from "../../permissions";
 import type { GitRef, ImpactRunBrief, PullRequestList, Repository } from "../../types";
 import { RiskBadge } from "./shared";
+
+const PAGE_SIZE = 50;
 
 export function ImpactListPage() {
   const { user } = useAuth();
@@ -15,6 +19,12 @@ export function ImpactListPage() {
   const repoId = params.get("repo") ?? "";
   const [repos, setRepos] = useState<Repository[]>([]);
   const [runs, setRuns] = useState<ImpactRunBrief[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [purging, setPurging] = useState(false);
+  const [notice, setNotice] = useState("");
   const [prs, setPrs] = useState<PullRequestList | null>(null);
   const [refs, setRefs] = useState<GitRef[]>([]);
   const [defaultRef, setDefaultRef] = useState("");
@@ -28,8 +38,19 @@ export function ImpactListPage() {
   const repo = useMemo(() => repos.find((r) => r.repo_id === repoId) ?? null, [repos, repoId]);
 
   const loadRuns = useCallback(() => {
-    api<ImpactRunBrief[]>(`/api/impact-runs${repoId ? `?repo_id=${repoId}` : ""}`).then(setRuns).catch((err) => setError(errorText(err)));
-  }, [repoId]);
+    const qs = new URLSearchParams({ page: String(page), page_size: String(PAGE_SIZE) });
+    if (repoId) qs.set("repo_id", repoId);
+    if (from) qs.set("date_from", dayToIso(from));
+    if (to) qs.set("date_to", dayToIso(to, true));
+    api<Page<ImpactRunBrief>>(`/api/impact-runs/page?${qs}`)
+      .then((data) => {
+        setRuns(data.items);
+        setTotal(data.total);
+      })
+      .catch((err) => setError(errorText(err)));
+  }, [repoId, page, from, to]);
+
+  useEffect(() => setPage(1), [repoId, from, to]);
 
   useEffect(() => {
     api<Repository[]>("/api/repositories").then(setRepos).catch((err) => setError(errorText(err)));
@@ -91,13 +112,12 @@ export function ImpactListPage() {
         <ErrorNote message={error} />
         <section className="panel p-3">
           <div className="flex flex-wrap items-end gap-3">
-            <label className="block w-96">
+            <div className="block w-full max-w-4xl">
               <span className="label-micro">Repository</span>
-              <Select className="field mt-1" value={repoId} onChange={(e) => setParams(e.target.value ? { repo: e.target.value } : {})}>
-                <option value="">All repositories</option>
-                {repos.map((r) => <option key={r.repo_id} value={r.repo_id}>{r.name}</option>)}
-              </Select>
-            </label>
+              <div className="mt-1">
+                <RepoPicker repos={repos} value={repoId} onChange={(id) => setParams(id ? { repo: id } : {})} />
+              </div>
+            </div>
             {repo && <SourceBadge source={repo.source_type} label={repo.provider_label} />}
           </div>
         </section>
@@ -167,7 +187,16 @@ export function ImpactListPage() {
         )}
 
         <section className="panel">
-          <div className="panel-head"><span>Impact runs</span><span>{runs.length}</span></div>
+          <div className="panel-head"><span>Impact runs</span><span>{total}</span></div>
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line p-3">
+            <DateRangeFilter from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+            {canWrite && (
+              <button type="button" className="btn h-8 hover:!text-critical" onClick={() => setPurging(true)}>
+                <span className="material-symbols-outlined icon-sm">delete_sweep</span>Purge by date…
+              </button>
+            )}
+          </div>
+          {notice && <p className="border-b border-line px-3 py-2 text-body-sm text-ok">{notice}</p>}
           <table className="w-full">
             <thead className="table-head"><tr><th>Change</th>{!repoId && <th>Repository</th>}<th>Status</th><th>Risk</th><th className="text-right">Files</th><th className="text-right">Entry points</th><th>Head</th><th>Started</th></tr></thead>
             <tbody>
@@ -185,9 +214,28 @@ export function ImpactListPage() {
               ))}
             </tbody>
           </table>
-          {!runs.length && <Empty icon="difference" title="No impact runs yet">Pick a repository, then analyse an open pull request or compare two branches.</Empty>}
+          {!runs.length && <Empty icon="difference" title={from || to ? "No impact runs in this date range" : "No impact runs yet"}>{from || to ? "Clear the date filter to see all runs." : "Pick a repository, then analyse an open pull request or compare two branches."}</Empty>}
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
         </section>
       </div>
+      {purging && (
+        <PurgeDialog
+          title={repo ? `Purge impact runs · ${repo.name}` : "Purge impact runs · all repositories"}
+          endpoint="/api/impact-runs/purge"
+          noun="impact run(s)"
+          extra={repoId ? { repo_id: repoId } : {}}
+          initialFrom={from}
+          initialTo={to}
+          note={repo ? "Only runs for the selected repository are affected." : "Runs for every repository are affected. Pick a repository above to limit the purge."}
+          onClose={() => setPurging(false)}
+          onDone={(result) => {
+            setPurging(false);
+            setNotice(`Deleted ${result.deleted} impact run(s)${result.skipped_active ? `; kept ${result.skipped_active} queued/running` : ""}.`);
+            if (page === 1) loadRuns();
+            else setPage(1);
+          }}
+        />
+      )}
     </div>
   );
 }

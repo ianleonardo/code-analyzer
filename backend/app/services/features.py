@@ -1,7 +1,9 @@
 """Feature catalogue per repository: user-facing capabilities mapped to entry points by patterns.
 
 The LLM (or a deterministic grouping by route segment / folder) proposes features from the entry points of a stored
-analysis; users confirm, rename or edit them, so the mapping stays stable across pull requests. Patterns:
+analysis. This happens automatically when an analysis of the default branch completes (and the first time the catalogue of
+an older repository is opened); users confirm, rename or edit the proposals, and confirmed features are never replaced, so
+the mapping stays stable across pull requests. Patterns:
   {"type": "route", "value": "/payments"}     endpoint URL prefix (or glob)
   {"type": "path",  "value": "src/pay/**"}    file glob of the entry point
   {"type": "item",  "value": "endpoint:..."}  one catalogue item key
@@ -70,6 +72,10 @@ def list_features(user: dict, repo_id: str, analysis_id: str = "") -> dict:
     _repo(repo_id)
     features = all_for(repo_id)
     analysis_id = analysis_id or _latest_analysis(repo_id)
+    if not features and analysis_id:
+        # Repositories analysed before automatic building: build the catalogue the first time it is opened.
+        rebuild(repo_id, analysis_id, user["user_id"])
+        features = all_for(repo_id)
     entries = entry_items(analysis_id) if analysis_id else []
     match_features(entries, features)
     counts: dict[str, int] = {}
@@ -137,6 +143,62 @@ def delete_feature(user: dict, feature_id: str) -> None:
     db.exec_sql("DELETE FROM features WHERE feature_id = ?", [feature_id])
 
 
+def _insert(repo_id: str, proposal: dict, created_by: str) -> None:
+    data = _clean({**proposal, "confirmed": False})
+    now = db.now()
+    db.insert("features", {"feature_id": str(uuid.uuid4()), "repo_id": repo_id, "name": data["name"], "description": data["description"],
+                           "patterns_json": json.dumps(data["patterns"]), "source": str(proposal.get("source") or "rules")[:10], "confirmed": False,
+                           "created_by": created_by, "created_at": now, "updated_at": now})
+
+
+def rebuild(repo_id: str, analysis_id: str, created_by: str) -> dict:
+    """Re-proposes the catalogue from an analysis' entry points. Confirmed features (and their names) are kept untouched;
+    earlier unconfirmed proposals are replaced. Returns {"created", "kept", "entries"}."""
+    entries = entry_items(analysis_id)
+    if not entries:
+        return {"created": 0, "kept": len(all_for(repo_id)), "entries": 0}
+    proposals = pr_logic.suggest_features(entries)
+    db.exec_sql("DELETE FROM features WHERE repo_id = ? AND confirmed = FALSE", [repo_id])
+    confirmed = all_for(repo_id)
+    existing = {f["name"].lower() for f in confirmed}
+    # Entry points a confirmed feature already selects: a proposal that only re-selects those (e.g. "Orders" after the
+    # user renamed it to "Order lookup") is skipped instead of duplicating the confirmed feature.
+    match_features(entries, confirmed)
+    covered = {e["item_key"] for e in entries if e["feature_ids"]}
+    created = 0
+    for index, proposal in enumerate(proposals):
+        if proposal["name"].lower() in existing:
+            continue
+        probe = [dict(e) for e in entries]
+        match_features(probe, [{"feature_id": f"p{index}", "patterns": proposal.get("patterns", [])}])
+        selects = {e["item_key"] for e in probe if e["feature_ids"]}
+        if not selects or selects <= covered:
+            continue
+        try:
+            _insert(repo_id, proposal, created_by)
+        except AppError:
+            continue
+        existing.add(proposal["name"].lower())
+        created += 1
+    return {"created": created, "kept": len(confirmed), "entries": len(entries)}
+
+
+def auto_build(repo_id: str, analysis_id: str, created_by: str) -> dict | None:
+    """Called when a branch analysis completes. Rebuilds the proposals when the analysis is of the default branch (or the
+    repository has no default branch, or no features yet) and it is the repository's latest completed branch analysis.
+    Returns None when nothing was done."""
+    repo = db.fetchone("SELECT default_branch FROM repositories WHERE repo_id = ?", [repo_id])
+    analysis = db.fetchone("SELECT branch, coalesce(purpose, 'branch') AS purpose FROM analyses WHERE analysis_id = ?", [analysis_id])
+    if not repo or not analysis or analysis["purpose"] != "branch":
+        return None
+    has_features = db.fetchone("SELECT feature_id FROM features WHERE repo_id = ? LIMIT 1", [repo_id]) is not None
+    default = (repo.get("default_branch") or "").strip()
+    on_default = not default or not analysis["branch"] or analysis["branch"] == default
+    if has_features and (not on_default or _latest_analysis(repo_id) != analysis_id):
+        return None
+    return rebuild(repo_id, analysis_id, created_by)
+
+
 def suggest(user: dict, repo_id: str, body: dict) -> dict:
     """Proposes features (unconfirmed) from the entry points of an analysis. Existing confirmed features are kept."""
     require(user, "repositories", "write")
@@ -147,15 +209,7 @@ def suggest(user: dict, repo_id: str, body: dict) -> dict:
     entries = entry_items(analysis_id)
     if not entries:
         raise AppError(409, "The analysis has no endpoints, jobs, listeners or screens to group into features.")
-    if body.get("replace", True):
-        db.exec_sql("DELETE FROM features WHERE repo_id = ? AND confirmed = FALSE", [repo_id])
-    existing = {f["name"].lower() for f in all_for(repo_id)}
-    created = 0
-    for proposal in pr_logic.suggest_features(entries):
-        if proposal["name"].lower() in existing:
-            continue
-        create_feature(user, repo_id, {**proposal, "confirmed": False})
-        created += 1
+    created = rebuild(repo_id, analysis_id, user["user_id"])["created"]
     result = list_features(user, repo_id, analysis_id)
     result["created"] = created
     return result

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from fastapi.responses import PlainTextResponse, Response
 
 from app.deps import current_user
 from app.services import features, pr_impact
@@ -47,9 +48,39 @@ def list_runs(repo_id: str = "", limit: int = 100, user: dict = Depends(current_
     return pr_impact.list_runs(user, repo_id, limit)
 
 
+@router.get("/impact-runs/page")
+def page_runs(repo_id: str = "", page: int = 1, page_size: int = 50, date_from: str = "", date_to: str = "", user: dict = Depends(current_user)):
+    return pr_impact.page_runs(user, repo_id, page, page_size, date_from, date_to)
+
+
+@router.post("/impact-runs/purge")
+def purge_runs(body: dict, user: dict = Depends(current_user)):
+    return pr_impact.purge_runs(user, body)
+
+
 @router.get("/impact-runs/{run_id}")
 def get_run(run_id: str, user: dict = Depends(current_user)):
     return pr_impact.get_run(user, run_id)
+
+
+@router.get("/impact-runs/{run_id}/report.md", response_class=PlainTextResponse)
+def run_report_md(run_id: str, user: dict = Depends(current_user)):
+    run = pr_impact.get_run(user, run_id)
+    return PlainTextResponse(
+        pr_impact.run_markdown(user, run_id),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{pr_impact.report_filename(run, "md")}"'},
+    )
+
+
+@router.get("/impact-runs/{run_id}/report.pdf")
+def run_report_pdf(run_id: str, user: dict = Depends(current_user)):
+    run = pr_impact.get_run(user, run_id)
+    return Response(
+        content=pr_impact.run_pdf(user, run_id),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{pr_impact.report_filename(run, "pdf")}"'},
+    )
 
 
 @router.get("/impact-runs/{run_id}/events")

@@ -14,7 +14,7 @@ from app import db
 from app.config import SYNTHESIS_RULES
 from app.errors import AppError
 from app.permissions import require
-from app.services import llm
+from app.services import listing, llm, md_pdf
 
 FILE_LIST_CAP = 400
 
@@ -269,6 +269,38 @@ def list_comparisons(user: dict) -> list[dict]:
     return rows
 
 
+def page_comparisons(user: dict, page: int = 1, page_size: int = listing.PAGE_SIZE, date_from: str = "", date_to: str = "", q: str = "") -> dict:
+    """One page of saved comparisons (newest first) with the total, optionally filtered by date range and title."""
+    require(user, "insights", "read")
+    number, size, offset = listing.page_bounds(page, page_size)
+    where, params = listing.date_range(date_from, date_to, "created_at")
+    if q.strip():
+        where.append("lower(title) LIKE ?")
+        params.append(f"%{q.strip().lower()}%")
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    total = int(db.scalar(f"SELECT count(*) FROM comparisons {clause}", params) or 0)
+    rows = db.fetchall(
+        f"SELECT comparison_id, title, left_analysis_id, right_analysis_id, created_by, created_at FROM comparisons {clause} ORDER BY created_at DESC LIMIT {size} OFFSET {offset}",
+        params,
+    )
+    names = {u["user_id"]: u["username"] for u in db.fetchall("SELECT user_id, username FROM users")}
+    for row in rows:
+        row["created_by_name"] = names.get(row["created_by"], row["created_by"])
+    return {"items": rows, "total": total, "page": number, "page_size": size}
+
+
+def purge_comparisons(user: dict, body: dict) -> dict:
+    """Deletes saved comparisons (and their chats) created in [date_from, date_to). dry_run only counts."""
+    require(user, "insights", "write")
+    where, params = listing.date_range(str(body.get("date_from") or ""), str(body.get("date_to") or ""), "created_at", required=True)
+    ids = [r["comparison_id"] for r in db.fetchall(f"SELECT comparison_id FROM comparisons WHERE {' AND '.join(where)}", params)]
+    dry_run = bool(body.get("dry_run"))
+    if not dry_run:
+        for comparison_id in ids:
+            delete_comparison(user, comparison_id, require_write=False)
+    return {"matched": len(ids), "deleted": 0 if dry_run else len(ids), "skipped_active": 0, "dry_run": dry_run}
+
+
 def delete_comparison(user: dict, comparison_id: str, require_write: bool = True) -> None:
     if require_write:
         require(user, "insights", "write")
@@ -470,185 +502,6 @@ def comparison_markdown(user: dict, comparison_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-_PDF_TRANSLATE = str.maketrans({
-    "—": "-",
-    "–": "-",
-    "−": "-",
-    "·": " | ",
-    "•": "-",
-    "→": "->",
-    "←": "<-",
-    "Δ": "Delta ",
-    "“": '"',
-    "”": '"',
-    "‘": "'",
-    "’": "'",
-    "…": "...",
-})
-
-
-def _pdf_escape(text: str) -> str:
-    clean = str(text or "").translate(_PDF_TRANSLATE)
-    clean = clean.encode("ascii", "replace").decode("ascii")
-    return clean.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-
-
 def comparison_pdf(user: dict, comparison_id: str) -> bytes:
-    """Render the Markdown comparison report into a multi-page styled PDF 1.4 document with zero external dependencies."""
-    import textwrap
-
-    md_text = comparison_markdown(user, comparison_id)
-    page_w, page_h = 595.28, 841.89
-    margin_x = 42.0
-    top_y = page_h - 48.0
-    bottom_y = 48.0
-
-    pages: list[list[str]] = [[]]
-    y = top_y
-
-    def cur_page() -> list[str]:
-        return pages[-1]
-
-    def new_page() -> None:
-        nonlocal y
-        pages.append([])
-        y = top_y
-
-    def ensure_space(height: float) -> None:
-        if y - height < bottom_y:
-            new_page()
-
-    def draw_text(x: float, y_pos: float, text: str, font: str = "F1", size: float = 9.5, rgb: tuple[float, float, float] = (0.12, 0.16, 0.23)) -> None:
-        r, g, b = rgb
-        cur_page().append(f"BT /{font} {size:.1f} Tf {r:.3f} {g:.3f} {b:.3f} rg {x:.2f} {y_pos:.2f} Td ({_pdf_escape(text)}) Tj ET")
-
-    def draw_rect(x: float, y_pos: float, w: float, h: float, rgb: tuple[float, float, float]) -> None:
-        r, g, b = rgb
-        cur_page().append(f"{r:.3f} {g:.3f} {b:.3f} rg {x:.2f} {y_pos:.2f} {w:.2f} {h:.2f} re f")
-
-    def strip_md_inline(line: str) -> str:
-        s = line.replace("**", "").replace("`", "")
-        return s.strip()
-
-    for raw_line in md_text.splitlines():
-        line = raw_line.rstrip()
-        if not line:
-            y -= 6.0
-            continue
-
-        if line.startswith("# "):
-            ensure_space(36.0)
-            title_text = strip_md_inline(line[2:])
-            wrapped = textwrap.wrap(title_text, width=62) or [title_text]
-            box_h = 16.0 * len(wrapped) + 14.0
-            draw_rect(margin_x, y - box_h + 6.0, page_w - 2 * margin_x, box_h, (0.06, 0.09, 0.16))
-            for idx, part in enumerate(wrapped):
-                draw_text(margin_x + 10.0, y - 12.0 - idx * 16.0, part, font="F2", size=13.5, rgb=(0.98, 0.98, 1.0))
-            y -= box_h + 8.0
-            continue
-
-        if line.startswith("## "):
-            ensure_space(28.0)
-            y -= 6.0
-            sec_text = strip_md_inline(line[3:])
-            draw_rect(margin_x, y - 4.0, page_w - 2 * margin_x, 18.0, (0.94, 0.96, 0.98))
-            draw_rect(margin_x, y - 4.0, 3.0, 18.0, (0.01, 0.52, 0.78))
-            draw_text(margin_x + 8.0, y + 1.0, sec_text.upper(), font="F2", size=10.5, rgb=(0.06, 0.09, 0.16))
-            y -= 20.0
-            continue
-
-        if line.startswith("### "):
-            ensure_space(20.0)
-            y -= 3.0
-            sub_text = strip_md_inline(line[4:])
-            draw_text(margin_x, y, sub_text, font="F2", size=9.8, rgb=(0.01, 0.41, 0.63))
-            y -= 14.0
-            continue
-
-        if line.startswith("|"):
-            if ":---" in line or "---:" in line:
-                continue
-            cells = [strip_md_inline(c) for c in line.strip("|").split("|")]
-            ensure_space(15.0)
-            col_w = (page_w - 2 * margin_x) / max(1, len(cells))
-            is_header = any(h in cells[0].lower() for h in ("metric", "layer", "package", "file"))
-            if is_header:
-                draw_rect(margin_x, y - 3.5, page_w - 2 * margin_x, 13.5, (0.91, 0.94, 0.97))
-            for idx, cell in enumerate(cells):
-                max_chars = max(8, int(col_w / 5.2))
-                clipped = (cell[: max_chars - 2] + "..") if len(cell) > max_chars else cell
-                draw_text(
-                    margin_x + idx * col_w + 4.0,
-                    y,
-                    clipped,
-                    font="F2" if is_header else "F3",
-                    size=8.2,
-                    rgb=(0.06, 0.09, 0.16) if is_header else (0.18, 0.22, 0.30),
-                )
-            y -= 13.5
-            continue
-
-        is_bullet = line.startswith("- ") or line.startswith("* ")
-        clean_line = strip_md_inline(line[2:] if is_bullet else line)
-        prefix = "- " if is_bullet else ""
-        wrapped = textwrap.wrap(clean_line, width=88) or [clean_line]
-        for idx, part in enumerate(wrapped):
-            ensure_space(13.0)
-            draw_text(
-                margin_x + (10.0 if is_bullet and idx > 0 else 0.0),
-                y,
-                (prefix if idx == 0 else "") + part,
-                font="F1",
-                size=9.2,
-                rgb=(0.15, 0.19, 0.26),
-            )
-            y -= 12.5
-
-    total_pages = len(pages)
-    for idx, page_cmds in enumerate(pages, start=1):
-        footer = f"Code Analyzer Comparison Report | Page {idx} of {total_pages}"
-        page_cmds.append(
-            f"BT /F1 8.0 Tf 0.450 0.500 0.580 rg {margin_x:.2f} 24.00 Td ({_pdf_escape(footer)}) Tj ET"
-        )
-
-    objects: list[bytes] = []
-
-    def add_obj(body: bytes) -> int:
-        objects.append(body)
-        return len(objects)
-
-    add_obj(b"<< /Type /Catalog /Pages 2 0 R >>")
-    add_obj(b"")  # placeholder for Pages object (id 2)
-    f1_id = add_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
-    f2_id = add_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
-    f3_id = add_obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>")
-
-    page_ids: list[int] = []
-    for page_cmds in pages:
-        stream_bytes = "\n".join(page_cmds).encode("ascii", "replace")
-        content_id = add_obj(b"<< /Length " + str(len(stream_bytes)).encode("ascii") + b" >>\nstream\n" + stream_bytes + b"\nendstream")
-        page_dict = (
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w:.2f} {page_h:.2f}] "
-            f"/Resources << /Font << /F1 {f1_id} 0 R /F2 {f2_id} 0 R /F3 {f3_id} 0 R >> >> "
-            f"/Contents {content_id} 0 R >>"
-        ).encode("ascii")
-        page_ids.append(add_obj(page_dict))
-
-    kids = " ".join(f"{pid} 0 R" for pid in page_ids)
-    objects[1] = f"<< /Type /Pages /Kids [{kids}] /Count {len(page_ids)} >>".encode("ascii")
-
-    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
-    offsets: list[int] = [0]
-    for obj_id, body in enumerate(objects, start=1):
-        offsets.append(len(out))
-        out += f"{obj_id} 0 obj\n".encode("ascii") + body + b"\nendobj\n"
-
-    xref_pos = len(out)
-    out += f"xref\n0 {len(objects) + 1}\n".encode("ascii")
-    out += b"0000000000 65535 f \n"
-    for off in offsets[1:]:
-        out += f"{off:010d} 00000 n \n".encode("ascii")
-    out += (
-        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
-    )
-    return bytes(out)
+    """The Markdown comparison report as a PDF."""
+    return md_pdf.render(comparison_markdown(user, comparison_id), "Code Analyzer Comparison Report")

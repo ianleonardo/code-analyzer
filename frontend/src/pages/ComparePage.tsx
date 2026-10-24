@@ -1,38 +1,59 @@
 import type { CatalogDiff, CatalogDiffPart } from "../types";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, del, downloadFile, errorText, formatDateTime, post } from "../api";
 import { useAuth } from "../auth";
 import { ChatPanel } from "../components/ChatPanel";
+import { RepoPicker } from "../components/RepoPicker";
+import { DateRangeFilter, type Page, Pagination, PurgeDialog, dayToIso, useDebounced } from "../components/ListTools";
 import { ConfirmDialog, Empty, ErrorNote, HealthGauge, Markdown, PageHeader, Select, SeverityBadge, ShortSha, Spinner } from "../components/ui";
 import { can } from "../permissions";
-import type { AnalysisBrief, Comparison } from "../types";
+import type { AnalysisBrief, Comparison, Repository } from "../types";
 import { LanguageBar } from "./analysis/OverviewTab";
 
+const COMPARE_PAGE_SIZE = 50;
 const LOWER_IS_BETTER = new Set(["avg_complexity", "max_complexity", "cycles", "layer_violations", "god_modules", "duplication_pct", "critical", "warning", "info"]);
 
-function AnalysisSelect({ value, onChange, options, label }: { value: string; onChange: (v: string) => void; options: AnalysisBrief[]; label: string }) {
-  const groups = useMemo(() => {
-    const map: Record<string, AnalysisBrief[]> = {};
-    for (const a of options) (map[a.repo_name ?? a.repo_id] ??= []).push(a);
-    return map;
-  }, [options]);
+/** One side of a comparison: pick the repository (searchable, with host/project filters), then one of its completed analyses. */
+function AnalysisSide({ label, value, onChange, repos }: { label: string; value: string; onChange: (analysisId: string) => void; repos: Repository[] }) {
+  const [repoId, setRepoId] = useState("");
+  const [runs, setRuns] = useState<AnalysisBrief[] | null>(null);
+
+  // An analysis chosen elsewhere (URL ?left=/?right=, or swap) selects its repository.
+  useEffect(() => {
+    if (!value) return;
+    if (runs?.some((a) => a.analysis_id === value)) return;
+    api<AnalysisBrief>(`/api/analyses/${value}`).then((a) => setRepoId(a.repo_id)).catch(() => undefined);
+  }, [value]);
+
+  useEffect(() => {
+    setRuns(null);
+    if (!repoId) return;
+    api<AnalysisBrief[]>(`/api/analyses?repo_id=${encodeURIComponent(repoId)}&status=completed&limit=500`).then(setRuns).catch(() => setRuns([]));
+  }, [repoId]);
+
+  // Default to the newest completed analysis when the current choice is not one of this repository's.
+  useEffect(() => {
+    if (!runs) return;
+    if (!runs.some((a) => a.analysis_id === value)) onChange(runs[0]?.analysis_id ?? "");
+  }, [runs]);
+
   return (
-    <label className="block flex-1">
+    <div className="min-w-0 space-y-2">
       <span className="label-micro">{label}</span>
-      <Select className="field mt-1" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose a completed analysis…</option>
-        {Object.entries(groups).map(([repo, items]) => (
-          <optgroup key={repo} label={repo}>
-            {items.map((a) => (
-              <option key={a.analysis_id} value={a.analysis_id}>
-                {repo} @ {a.branch || "archive"} · {a.commit_sha.slice(0, 7)} · {formatDateTime(a.finished_at)} · health {a.health_score}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </Select>
-    </label>
+      <RepoPicker repos={repos} value={repoId} allowAll={false} onChange={(id) => { setRepoId(id); if (!id) onChange(""); }} />
+      <label className="block">
+        <span className="sr-only">Analysis</span>
+        <Select className="field" aria-label={`${label} analysis`} disabled={!repoId || !runs?.length} value={value} onChange={(e) => onChange(e.target.value)}>
+          <option value="">{!repoId ? "Choose a repository first" : runs === null ? "Loading analyses…" : runs.length ? "Choose a completed analysis…" : "No completed analysis for this repository"}</option>
+          {(runs ?? []).map((a) => (
+            <option key={a.analysis_id} value={a.analysis_id}>
+              {[a.branch || "archive", a.commit_sha.slice(0, 7), formatDateTime(a.finished_at), `health ${a.health_score ?? "—"}`].filter(Boolean).join(" · ")}
+            </option>
+          ))}
+        </Select>
+      </label>
+    </div>
   );
 }
 
@@ -41,19 +62,42 @@ export function CompareListPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [list, setList] = useState<Comparison[]>([]);
-  const [options, setOptions] = useState<AnalysisBrief[]>([]);
+  const [repos, setRepos] = useState<Repository[]>([]);
   const [left, setLeft] = useState(params.get("left") ?? "");
   const [right, setRight] = useState(params.get("right") ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState<Comparison | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [query, setQuery] = useState("");
+  const [purging, setPurging] = useState(false);
+  const [notice, setNotice] = useState("");
+  const search = useDebounced(query.trim());
   const canWrite = can(user, "insights", "write");
 
-  const loadList = () => api<Comparison[]>("/api/comparisons").then(setList);
+  const loadList = useCallback(() => {
+    const qs = new URLSearchParams({ page: String(page), page_size: String(COMPARE_PAGE_SIZE) });
+    if (from) qs.set("date_from", dayToIso(from));
+    if (to) qs.set("date_to", dayToIso(to, true));
+    if (search) qs.set("q", search);
+    return api<Page<Comparison>>(`/api/comparisons/page?${qs}`)
+      .then((data) => {
+        setList(data.items);
+        setTotal(data.total);
+      })
+      .catch((err) => setError(errorText(err)));
+  }, [page, from, to, search]);
+
+  useEffect(() => setPage(1), [from, to, search]);
+  useEffect(() => {
+    void loadList();
+  }, [loadList]);
 
   useEffect(() => {
-    loadList();
-    api<AnalysisBrief[]>("/api/analyses?status=completed&limit=500").then(setOptions);
+    api<Repository[]>("/api/repositories").then((all) => setRepos(all.filter((r) => r.analysis_count > 0))).catch((err) => setError(errorText(err)));
   }, []);
 
   async function create() {
@@ -75,12 +119,15 @@ export function CompareListPage() {
       <div className="space-y-4 p-4">
         {canWrite && (
           <section className="panel p-3">
-            <div className="flex flex-wrap items-end gap-3">
-              <AnalysisSelect label="Left (baseline)" value={left} onChange={setLeft} options={options} />
-              <button type="button" className="icon-btn mb-1 h-8 w-8 border border-line" title="Swap" onClick={() => { setLeft(right); setRight(left); }}>
+            <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+              <AnalysisSide label="Left (baseline)" value={left} onChange={setLeft} repos={repos} />
+              <button type="button" className="icon-btn mt-6 h-8 w-8 justify-self-center border border-line" title="Swap" onClick={() => { setLeft(right); setRight(left); }}>
                 <span className="material-symbols-outlined">swap_horiz</span>
               </button>
-              <AnalysisSelect label="Right (candidate)" value={right} onChange={setRight} options={options} />
+              <AnalysisSide label="Right (candidate)" value={right} onChange={setRight} repos={repos} />
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-3 border-t border-line pt-3">
+              {left && left === right && <span className="text-body-sm text-warning">Pick two different analyses.</span>}
               <button type="button" className="btn btn-primary h-8" disabled={!left || !right || left === right || busy} onClick={() => void create()}>
                 <span className="material-symbols-outlined icon-sm">compare_arrows</span>{busy ? "Comparing…" : "Compare"}
               </button>
@@ -89,7 +136,22 @@ export function CompareListPage() {
           </section>
         )}
         <section className="panel">
-          <div className="panel-head"><span>Saved comparisons</span></div>
+          <div className="panel-head"><span>Saved comparisons</span><span>{total}</span></div>
+          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line p-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block w-64">
+                <span className="label-micro">Search title</span>
+                <input className="field mt-1" placeholder="repo, branch…" value={query} onChange={(e) => setQuery(e.target.value)} />
+              </label>
+              <DateRangeFilter from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
+            </div>
+            {canWrite && (
+              <button type="button" className="btn h-8 hover:!text-critical" onClick={() => setPurging(true)}>
+                <span className="material-symbols-outlined icon-sm">delete_sweep</span>Purge by date…
+              </button>
+            )}
+          </div>
+          {notice && <p className="border-b border-line px-3 py-2 text-body-sm text-ok">{notice}</p>}
           <table className="w-full">
             <thead className="table-head"><tr><th>Comparison</th><th>By</th><th>Created</th><th className="w-32 text-right">Actions</th></tr></thead>
             <tbody>
@@ -132,9 +194,27 @@ export function CompareListPage() {
               ))}
             </tbody>
           </table>
-          {!list.length && <Empty icon="compare_arrows" title="No comparisons yet">Pick two completed analyses above.</Empty>}
+          {!list.length && <Empty icon="compare_arrows" title={from || to || query ? "No comparisons match the filters" : "No comparisons yet"}>{from || to || query ? "Clear the filters to see all comparisons." : "Pick two completed analyses above."}</Empty>}
+          <Pagination page={page} pageSize={COMPARE_PAGE_SIZE} total={total} onPage={setPage} />
         </section>
       </div>
+      {purging && (
+        <PurgeDialog
+          title="Purge saved comparisons"
+          endpoint="/api/comparisons/purge"
+          noun="comparison(s)"
+          initialFrom={from}
+          initialTo={to}
+          note="Chats attached to the deleted comparisons are deleted too. The underlying analyses are kept."
+          onClose={() => setPurging(false)}
+          onDone={(result) => {
+            setPurging(false);
+            setNotice(`Deleted ${result.deleted} comparison(s).`);
+            if (page === 1) void loadList();
+            else setPage(1);
+          }}
+        />
+      )}
       {deleting && (
         <ConfirmDialog
           title="Delete comparison"

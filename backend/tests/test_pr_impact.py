@@ -347,3 +347,49 @@ def test_pull_request_permission_errors_name_the_missing_scope():
     with pytest.raises(AppError) as caught:
         git_hosts._raise_pr(httpx.Response(404, json={}), ref, None)
     assert caught.value.extra["status"] == "auth_required"
+
+
+def test_impact_report_downloads(client, admin, git_repo):
+    repo_id = client.post("/api/repositories", json={"source_type": "local", "path": str(git_repo), "name": "orders-git"}, headers=admin).json()["repo_id"]
+    run_id = client.post(f"/api/repositories/{repo_id}/impact-runs", json={"base_ref": "main", "head_ref": "feature/cap-orders"}, headers=admin).json()["run_id"]
+    md = client.get(f"/api/impact-runs/{run_id}/report.md", headers=admin)
+    assert md.status_code == 200, md.text
+    assert md.headers["content-type"].startswith("text/markdown")
+    assert f'filename="IMPACT-feature-cap-orders-{run_id[:8]}.md"' in md.headers["content-disposition"]
+    text = md.text
+    assert text.startswith("# Pull-Request Impact Report — feature/cap-orders → main")
+    for section in ("## Summary", "## Review Checklist", "## Risk Breakdown", "## Changed Files (4)", "## Changed Symbols", "## Affected Entry Points",
+                    "## Blast Radius", "## Configuration", "## Tests", "## Limits of This Analysis"):
+        assert section in text, section
+    assert "`OrderService.find`" in text and "orders.timeout-ms" in text
+    assert "sk_live_9f8e7d6c5b4a3210" not in text  # secrets stay masked
+    pdf = client.get(f"/api/impact-runs/{run_id}/report.pdf", headers=admin)
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF-1.4") and pdf.content.endswith(b"%%EOF\n")
+    viewer = login(client, "viewer", "ViewerPass123!")
+    assert client.get(f"/api/impact-runs/{run_id}/report.md", headers=viewer).status_code == 200
+
+
+def test_feature_catalogue_builds_automatically(client, admin, git_repo):
+    added = client.post("/api/repositories", json={"source_type": "local", "path": str(git_repo), "name": "orders-git"}, headers=admin).json()
+    repo_id = added["repo_id"]
+    events = client.get(f"/api/analyses/{added['started_analysis']['analysis_id']}/events", headers=admin).json()
+    assert any("Feature catalogue rebuilt" in e["message"] for e in events)
+    data = client.get(f"/api/repositories/{repo_id}/features", headers=admin).json()
+    names = {f["name"]: f for f in data["features"]}
+    assert "Orders" in names and not names["Orders"]["confirmed"] and names["Orders"]["entry_count"] >= 1
+
+    # a confirmed (renamed) feature survives the next analysis; proposals are rebuilt, not duplicated
+    client.patch(f"/api/features/{names['Orders']['feature_id']}", json={"confirmed": True, "name": "Order lookup"}, headers=admin)
+    rerun = client.post(f"/api/repositories/{repo_id}/analyses", json={}, headers=admin)
+    assert rerun.status_code == 200, rerun.text
+    after = client.get(f"/api/repositories/{repo_id}/features", headers=admin).json()["features"]
+    assert [f["name"] for f in after].count("Order lookup") == 1 and any(f["confirmed"] for f in after)
+    assert "Orders" not in {f["name"] for f in after}  # its entry points are already covered by the confirmed feature
+    assert len(after) == len(data["features"])
+
+    # repositories analysed before this feature get their catalogue the first time it is opened
+    from app import db
+
+    db.exec_sql("DELETE FROM features WHERE repo_id = ?", [repo_id])
+    reopened = client.get(f"/api/repositories/{repo_id}/features", headers=admin).json()
+    assert reopened["features"]

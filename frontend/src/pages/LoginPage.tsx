@@ -46,7 +46,7 @@ export function LoginPage() {
               ["01", "Ingestion", "GitHub · Bitbucket · Git · archive · folder, per branch"],
               ["02", "Macro discovery", "Manifests, frameworks, containers, docs drift"],
               ["03", "Code graph", "Symbols, imports, calls, Tarjan SCC, PageRank"],
-              ["04", "Synthesis", "C4 diagrams, file roles, Gemini / Spirare summaries"],
+              ["04", "Synthesis", "C4 diagrams, file roles, summaries"],
               ["05", "Chat & compare", "Ask the analyst offline; diff repos and branches"],
             ].map(([n, title, text]) => (
               <div key={n} className="flex gap-3">

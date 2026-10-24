@@ -1,12 +1,19 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, del, errorText, formatDateTime, post } from "../../api";
+import { api, del, downloadFile, errorText, formatDateTime, post } from "../../api";
 import { useAuth } from "../../auth";
 import { DependencyGraph, EDGE_KINDS } from "../../components/DependencyGraph";
 import { ConfirmDialog, Empty, ErrorNote, LayerPill, Markdown, Meter, PageHeader, SeverityBadge, ShortSha, Spinner, StatusBadge } from "../../components/ui";
 import { can } from "../../permissions";
 import type { ChangedSymbol, ConfigKeyChange, EntryPoint, FileDiffPayload, GraphEdge, GraphNode, ImpactEvent, ImpactRun, ImpactedFile } from "../../types";
 import { ChangeChip, FindingSeverity, FlagChip, KindChips, ReachChip, RiskBadge, RiskGauge, Stat, basename } from "./shared";
+
+/** Same name the server suggests: IMPACT-PR-12-ab12cd34.md or IMPACT-<head ref>-ab12cd34.pdf */
+function reportName(run: ImpactRun, extension: string): string {
+  const label = run.pull_request ? `PR-${run.pull_request.number}` : run.head_ref || "change";
+  const safe = label.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "change";
+  return `IMPACT-${safe}-${run.run_id.slice(0, 8)}.${extension}`;
+}
 
 type Tab = "summary" | "changes" | "features" | "config" | "tests" | "graph" | "reviewers";
 const TABS: [Tab, string, string][] = [
@@ -83,6 +90,16 @@ export function ImpactRunPage() {
               <button type="button" className="btn" disabled={!!busy} onClick={() => void action("rerun", async () => { const next = await post<ImpactRun>(`/api/impact-runs/${runId}/rerun`); navigate(`/impact/${next.run_id}`); })}>
                 <span className="material-symbols-outlined icon-sm">replay</span>Re-run
               </button>
+            )}
+            {completed && (
+              <>
+                <button type="button" className="btn" title="Download the report as Markdown" disabled={!!busy} onClick={() => void action("md", () => downloadFile(`/api/impact-runs/${runId}/report.md`, reportName(run, "md")))}>
+                  <span className="material-symbols-outlined icon-sm">description</span>{busy === "md" ? "Preparing…" : "MD"}
+                </button>
+                <button type="button" className="btn" title="Download the report as PDF" disabled={!!busy} onClick={() => void action("pdf", () => downloadFile(`/api/impact-runs/${runId}/report.pdf`, reportName(run, "pdf")))}>
+                  <span className="material-symbols-outlined icon-sm">picture_as_pdf</span>{busy === "pdf" ? "Preparing…" : "PDF"}
+                </button>
+              </>
             )}
             {canWrite && completed && (
               <button type="button" className="btn" disabled={!!busy} onClick={() => void action("story", async () => setRun(await post<ImpactRun>(`/api/impact-runs/${runId}/narrative`)))}>
