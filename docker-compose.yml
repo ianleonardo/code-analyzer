@@ -1,0 +1,32 @@
+# DuckDB (default):            docker compose up --build
+# PostgreSQL instead:          DB_ENGINE=postgres docker compose --profile postgres up --build
+services:
+  app:
+    build: .
+    ports:
+      - "8001:8001"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+      DB_ENGINE: ${DB_ENGINE:-duckdb}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://codeanalyzer:codeanalyzer@postgres:5432/codeanalyzer}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8001}
+    volumes:
+      - cadata:/data
+
+  postgres:
+    image: postgres:16
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: codeanalyzer
+      POSTGRES_PASSWORD: codeanalyzer
+      POSTGRES_DB: codeanalyzer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  cadata:
+  pgdata:

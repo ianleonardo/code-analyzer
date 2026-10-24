@@ -1,0 +1,238 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Light Laboratory mode -------------------------------------------------------------------------------------- */
+:root {
+  color-scheme: light;
+  --canvas: 248 249 250;
+  --surface: 255 255 255;
+  --elevated: 241 245 249;
+  --inset: 248 250 252;
+  --line: 208 215 222;
+  --line-strong: 148 163 184;
+  --ink: 15 23 42;
+  --muted: 71 85 105;
+  --faint: 100 116 139;
+  --primary: 2 132 199;
+  --primary-hover: 3 105 161;
+  --on-primary: 255 255 255;
+  --layer-api: 2 132 199;
+  --layer-service: 124 58 237;
+  --layer-data: 13 148 136;
+  --layer-ui: 219 39 119;
+  --layer-shared: 71 85 105;
+  --critical: 220 38 38;
+  --warning: 217 119 6;
+  --info: 2 132 199;
+  --ok: 22 163 74;
+  --status-git: 22 163 74;
+  --status-archive: 147 51 234;
+  --status-local: 202 138 4;
+  --edge-imports: 100 116 139;
+  --edge-extends: 124 58 237;
+  --edge-implements: 13 148 136;
+  --edge-injects: 202 138 4;
+  --edge-calls: 239 68 68;
+  --edge-includes: 37 99 235;
+  --c-db-read: 2 132 199;
+  --c-db-write: 234 88 12;
+  --c-http: 124 58 237;
+  --c-env: 8 145 178;
+  --c-validation: 22 163 74;
+  --c-tx: 217 119 6;
+  --grid-dot: rgba(15, 23, 42, 0.07);
+  --code-keyword: #b4235a;
+  --code-string: #0f766e;
+  --code-comment: #94a3b8;
+  --code-number: #c2410c;
+  --code-call: #1d4ed8;
+  --code-annotation: #7c3aed;
+  --code-active: rgba(2, 132, 199, 0.08);
+}
+
+/* ---- Dark Telemetry mode (default) ------------------------------------------------------------------------------ */
+.dark {
+  color-scheme: dark;
+  --canvas: 10 13 18;
+  --surface: 18 23 31;
+  --elevated: 26 33 45;
+  --inset: 11 14 19;
+  --line: 37 48 65;
+  --line-strong: 59 75 100;
+  --ink: 225 226 234;
+  --muted: 186 201 204;
+  --faint: 132 147 150;
+  --primary: 0 229 255;
+  --primary-hover: 51 235 255;
+  --on-primary: 10 13 18;
+  --layer-api: 41 182 246;
+  --layer-service: 149 117 205;
+  --layer-data: 38 166 154;
+  --layer-ui: 236 64 122;
+  --layer-shared: 120 144 156;
+  --critical: 255 23 68;
+  --warning: 255 145 0;
+  --info: 0 229 255;
+  --ok: 0 230 118;
+  --status-git: 0 230 118;
+  --status-archive: 224 64 251;
+  --status-local: 255 214 0;
+  --edge-imports: 120 144 156;
+  --edge-extends: 179 157 219;
+  --edge-implements: 128 203 196;
+  --edge-injects: 255 224 130;
+  --edge-calls: 255 138 128;
+  --edge-includes: 144 202 249;
+  --c-db-read: 0 176 255;
+  --c-db-write: 255 145 0;
+  --c-http: 171 71 188;
+  --c-env: 38 198 218;
+  --c-validation: 102 187 106;
+  --c-tx: 255 213 79;
+  --grid-dot: rgba(132, 147, 150, 0.12);
+  --code-keyword: #ff8a80;
+  --code-string: #a5d6a7;
+  --code-comment: #5c6b7a;
+  --code-number: #ffb954;
+  --code-call: #00e5ff;
+  --code-annotation: #b39ddb;
+  --code-active: rgba(0, 229, 255, 0.07);
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: rgb(var(--canvas));
+  color: rgb(var(--ink));
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 18px;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+.tnum { font-feature-settings: "tnum" 1, "zero" 1; }
+.material-symbols-outlined {
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20;
+  font-size: 16px; line-height: 1; user-select: none; vertical-align: middle;
+}
+.icon-sm { font-size: 14px !important; }
+.icon-lg { font-size: 20px !important; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgb(var(--line)); }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--line-strong)); }
+
+/* Dotted breadboard canvas for graphs and diagrams */
+.grid-canvas {
+  background-color: rgb(var(--canvas));
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+@layer components {
+  .panel { @apply bg-surface border border-line; }
+  .panel-head { @apply flex items-center justify-between gap-2 border-b border-line px-3 h-8 font-mono text-micro uppercase text-muted; }
+  .label-micro { @apply font-mono text-micro uppercase text-muted; }
+  .field {
+    @apply w-full h-8 bg-inset border border-line rounded-sm px-2 text-body-md outline-none font-mono transition-colors;
+  }
+  .field:focus { @apply border-primary; }
+  textarea.field { @apply h-auto py-1.5; }
+  select.field {
+    @apply font-sans pr-6 bg-inset text-ink cursor-pointer;
+    background-color: rgb(var(--inset));
+    color: rgb(var(--ink));
+  }
+  select option,
+  select optgroup {
+    background-color: rgb(var(--surface));
+    color: rgb(var(--ink));
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line bg-surface text-body-md font-medium text-ink
+      transition-colors cursor-pointer whitespace-nowrap select-none;
+  }
+  .btn:hover:not(:disabled) { @apply border-primary text-primary; }
+  .btn:active:not(:disabled) { transform: scale(0.99); }
+  .btn:disabled { @apply opacity-40 cursor-not-allowed; }
+  .btn-primary { @apply bg-primary text-on-primary border-primary font-semibold; }
+  .btn-primary:hover:not(:disabled) { @apply bg-primary-hover text-on-primary border-primary-hover; }
+  .btn-danger:hover:not(:disabled) { @apply border-critical text-critical; }
+  .btn-ghost { @apply border-transparent bg-transparent; }
+  .icon-btn {
+    @apply inline-flex h-6 w-6 items-center justify-center rounded text-muted hover:text-primary hover:bg-elevated cursor-pointer;
+  }
+  .tab {
+    @apply relative flex items-center gap-1.5 h-9 px-3 font-mono text-code text-muted border-b-2 border-transparent hover:text-ink whitespace-nowrap;
+  }
+  .tab-active { @apply text-primary border-primary; }
+  .chip { @apply inline-flex items-center gap-1 rounded-sm border px-1 font-mono text-tag uppercase leading-[14px]; }
+  .pill { @apply inline-flex items-center gap-1 rounded-full border px-2 font-mono text-micro leading-[16px]; }
+  .table-head th { @apply sticky top-0 z-[1] bg-surface border-b border-line px-2 h-7 text-left font-mono text-micro uppercase text-muted font-semibold; }
+  .table-row td { @apply border-b border-line/60 px-2 py-1.5 align-top; }
+  .table-row:hover td { @apply bg-elevated/60; }
+  .card { @apply bg-surface border border-line p-3; }
+  .kpi { @apply font-mono text-display tnum; }
+  .link { @apply text-primary hover:underline cursor-pointer; }
+}
+
+/* Markdown */
+.md { line-height: 1.6; font-size: 13px; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0.45rem 0; }
+.md h1, .md h2, .md h3, .md h4 { font-weight: 600; margin: 0.9rem 0 0.35rem; }
+.md h1 { font-size: 18px; } .md h2 { font-size: 15px; } .md h3 { font-size: 13px; }
+.md ul { list-style: disc; padding-left: 1.2rem; margin: 0.35rem 0; }
+.md ol { list-style: decimal; padding-left: 1.3rem; margin: 0.35rem 0; }
+.md li { margin: 0.15rem 0; }
+.md a { color: rgb(var(--primary)); text-decoration: underline; }
+.md strong { font-weight: 600; color: rgb(var(--ink)); }
+.md code { font-family: "JetBrains Mono", monospace; font-size: 0.88em; background: rgb(var(--elevated)); padding: 0.05rem 0.3rem; border-radius: 2px; color: rgb(var(--primary)); }
+.md pre { background: rgb(var(--inset)); border: 1px solid rgb(var(--line)); padding: 0.6rem 0.75rem; overflow: auto; margin: 0.5rem 0; }
+.md pre code { background: transparent; padding: 0; color: rgb(var(--ink)); }
+.md table { border-collapse: collapse; margin: 0.5rem 0; font-size: 12px; }
+.md th, .md td { border: 1px solid rgb(var(--line)); padding: 0.25rem 0.5rem; text-align: left; vertical-align: top; }
+.md th { background: rgb(var(--elevated)); font-weight: 600; }
+.md blockquote { border-left: 2px solid rgb(var(--primary)); padding-left: 0.75rem; color: rgb(var(--muted)); margin: 0.5rem 0; }
+
+/* Code viewer */
+.code-view { font-family: "JetBrains Mono", monospace; font-size: 12px; line-height: 20px; }
+.code-view .ln { color: rgb(var(--faint)); user-select: none; text-align: right; padding-right: 12px; }
+.code-view .active { background: var(--code-active); }
+.tok-k { color: var(--code-keyword); }
+.tok-s { color: var(--code-string); }
+.tok-c { color: var(--code-comment); font-style: italic; }
+.tok-n { color: var(--code-number); }
+.tok-f { color: var(--code-call); }
+.tok-a { color: var(--code-annotation); }
+
+/* Mermaid */
+.mermaid-host svg { max-width: none; height: auto; }
+.pulse-dot { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.stripes { background-image: repeating-linear-gradient(45deg, transparent 0 6px, rgb(var(--primary) / 0.18) 6px 12px); background-size: 200% 100%; animation: stripes 1.2s linear infinite; }
+@keyframes stripes { from { background-position: 0 0; } to { background-position: 34px 0; } }
+
+/* Login background animations */
+@keyframes loginFloat {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-8px); }
+}
+@keyframes loginCodeScan {
+  0% { top: -24px; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+@keyframes loginDashFlow {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes loginIsoSweep {
+  0% { transform: translate(-35px, -14px); opacity: 0.25; }
+  50% { opacity: 0.9; }
+  100% { transform: translate(35px, 14px); opacity: 0.25; }
+}

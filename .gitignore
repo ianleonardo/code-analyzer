@@ -1,0 +1,16 @@
+node_modules
+dist
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+*.pyc
+data
+*.duckdb
+*.duckdb.wal
+.env
+.DS_Store
+coverage
+.vite
+.backup
+specs
