@@ -28,7 +28,15 @@ def data_dir() -> Path:
     raw = _env("DATA_DIR")
     if raw:
         p = Path(raw)
-        return p if p.is_absolute() else (ROOT / p).resolve()
+        if p.is_absolute():
+            return p
+        if (ROOT / "backend" / p / "codeanalyzer.duckdb").exists() or (ROOT / "backend" / p).is_dir():
+            return (ROOT / "backend" / p).resolve()
+        if (Path.cwd() / p).exists():
+            return (Path.cwd() / p).resolve()
+        return (ROOT / p).resolve()
+    if (ROOT / "backend" / "data").exists():
+        return (ROOT / "backend" / "data").resolve()
     return (ROOT / "data").resolve()
 
 
@@ -37,7 +45,13 @@ def workspace_dir() -> Path:
     raw = _env("WORKSPACE_DIR")
     if raw:
         p = Path(raw)
-        return p if p.is_absolute() else (ROOT / p).resolve()
+        if p.is_absolute():
+            return p
+        if (ROOT / "backend" / p).exists():
+            return (ROOT / "backend" / p).resolve()
+        if (Path.cwd() / p).exists():
+            return (Path.cwd() / p).resolve()
+        return (ROOT / p).resolve()
     return (data_dir() / "workspaces").resolve()
 
 
@@ -56,7 +70,13 @@ def db_path() -> Path:
     configured = _env("DUCKDB_PATH")
     if configured:
         p = Path(configured)
-        return p if p.is_absolute() else (ROOT / p).resolve()
+        if p.is_absolute():
+            return p
+        if (ROOT / "backend" / p).exists():
+            return (ROOT / "backend" / p).resolve()
+        if (Path.cwd() / p).exists():
+            return (Path.cwd() / p).resolve()
+        return (ROOT / p).resolve()
     return (data_dir() / "codeanalyzer.duckdb").resolve()
 
 

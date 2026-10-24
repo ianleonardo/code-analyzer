@@ -10,7 +10,7 @@ from app.permissions import PREDEFINED_ROLES
 
 PROVIDER_DEFAULTS = [
     # provider, label, chat model, chat url, embedding model, embedding url
-    ("gemini", "Gemini", "gemini-2.5-flash", "", "gemini-embedding-001", ""),
+    ("gemini", "Gemini", "gemini-3.6-flash", "", "gemini-embedding-001", ""),
     (
         "spirare",
         "Spirare",
@@ -71,6 +71,11 @@ def run() -> None:
     db.exec_sql(
         "UPDATE llm_providers SET embedding_base_url = ? WHERE provider = 'spirare' AND embedding_base_url = ?",
         ["https://s-egp.sg.uobnet.com/embedding/v1/embeddings", "https://is-egp.sg.uobnet.com/embedding/v1/embeddings"],
+    )
+    # Gemini installs still on the previous default chat model move to the new one. A model an admin chose is left alone.
+    db.exec_sql(
+        "UPDATE llm_providers SET chat_model = ? WHERE provider = 'gemini' AND chat_model = ?",
+        ["gemini-3.6-flash", "gemini-2.5-flash"],
     )
     for provider, label, chat_model, chat_url, embedding_model, embedding_url in PROVIDER_DEFAULTS:
         if db.fetchone("SELECT provider FROM llm_providers WHERE provider = ?", [provider]) is None:
