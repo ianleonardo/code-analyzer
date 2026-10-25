@@ -16,6 +16,41 @@ PORT="${1:-${PORT:-8001}}"
 # Ensure host data directory exists outside the container
 mkdir -p "$HOST_DATA_DIR"
 
+# Check if Docker image is available; if not, check for archive to load or Dockerfile to build
+if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  ARCHIVE=""
+  for candidate in \
+    "${ROOT}/code-analyzer-x86_64.tar.gz" \
+    "${ROOT}/code-analyzer.tar.gz" \
+    "${ROOT}/code-analyzer-latest.tar.gz" \
+    "${ROOT}/code-analyzer.tar" \
+    $(ls "${ROOT}"/code-analyzer*.tar.gz 2>/dev/null || true) \
+    $(ls "${ROOT}"/*.tar.gz 2>/dev/null || true); do
+    if [ -f "$candidate" ]; then
+      ARCHIVE="$candidate"
+      break
+    fi
+  done
+
+  if [ -n "$ARCHIVE" ]; then
+    echo "=========================================================="
+    echo " Image '${IMAGE_NAME}' not found in Docker engine."
+    echo " Detected image archive: ${ARCHIVE}"
+    echo " Automatically loading image into Docker..."
+    echo "=========================================================="
+    docker load < "$ARCHIVE"
+    echo "Image '${IMAGE_NAME}' loaded successfully!"
+    echo ""
+  elif [ -f "${ROOT}/Dockerfile" ]; then
+    echo "Image '${IMAGE_NAME}' not found in Docker. Building image locally..."
+    "${ROOT}/build.sh" "$IMAGE_NAME"
+  else
+    echo "Error: Docker image '${IMAGE_NAME}' not found, and no image archive (.tar.gz) was found in ${ROOT}." >&2
+    echo "Please copy 'code-analyzer-x86_64.tar.gz' to this directory or build the image using ./build.sh." >&2
+    exit 1
+  fi
+fi
+
 # If host data directory is empty but backend/data has an existing DuckDB database, copy it over
 if [ ! -f "$HOST_DATA_DIR/codeanalyzer.duckdb" ] && [ -f "$ROOT/backend/data/codeanalyzer.duckdb" ]; then
   echo "Notice: Detected existing database at backend/data/. Copying to ${HOST_DATA_DIR}..."
