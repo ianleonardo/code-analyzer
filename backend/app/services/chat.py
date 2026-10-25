@@ -105,6 +105,11 @@ def _loads(value, default):
 
 
 def _scope_title(scope_type: str, scope_id: str) -> str:
+    if scope_type == "global":
+        return "Global (All Repositories)"
+    if scope_type == "landscape":
+        row = db.fetchone("SELECT name FROM landscapes WHERE landscape_id = ?", [scope_id])
+        return f"Landscape: {row['name']}" if row else "Landscape"
     if scope_type == "analysis":
         row = db.fetchone("SELECT r.name, a.branch, a.status FROM analyses a JOIN repositories r ON r.repo_id = a.repo_id WHERE a.analysis_id = ?", [scope_id])
         if row is None:
@@ -172,17 +177,20 @@ def create_session(user: dict, body: dict) -> dict:
     _require_chat(user)
     _ensure_schema()
     scope_type = str(body.get("scope_type") or "analysis")
-    if scope_type not in ("analysis", "comparison"):
-        raise AppError(400, "Chat scope must be an analysis or a comparison")
+    if scope_type not in ("analysis", "comparison", "global", "landscape"):
+        raise AppError(400, "Chat scope must be an analysis, comparison, global, or landscape")
     scope_id = str(body.get("scope_id") or "")
+    if scope_type == "global" and not scope_id:
+        scope_id = "all"
     label = _scope_title(scope_type, scope_id)
     session_id = str(uuid.uuid4())
     is_public = bool(body.get("is_public", False))
     now = db.now()
+    default_title = "Global Portfolio Chat" if scope_type == "global" else f"Chat · {label}"
     db.insert(
         "chat_sessions",
         {"session_id": session_id, "user_id": user["user_id"], "scope_type": scope_type, "scope_id": scope_id,
-         "title": str(body.get("title") or f"Chat · {label}")[:300], "is_public": is_public, "created_at": now, "updated_at": now},
+         "title": str(body.get("title") or default_title)[:300], "is_public": is_public, "created_at": now, "updated_at": now},
     )
     return get_session(user, session_id)
 
@@ -368,6 +376,174 @@ def _is_off_topic_question(question: str, analysis_ids: list[str], context: str,
     return True
 
 
+def _context_for_global(question: str, landscape_id: str = "") -> tuple[str, list[dict], list[str]]:
+    join_clause = ""
+    where_landscape = ""
+    filter_params: list = []
+    if landscape_id:
+        join_clause = "JOIN landscape_repos lr ON lr.repo_id = r.repo_id"
+        where_landscape = "AND lr.landscape_id = ?"
+        filter_params = [landscape_id]
+
+    latest_rows = db.fetchall(
+        f"""
+        SELECT r.repo_id, r.name AS repo_name, r.url, a.analysis_id, a.branch, a.commit_sha,
+               a.health_score, a.architecture_style, a.file_count, a.loc_total, a.summary,
+               a.macro_json, a.stats_json, a.finished_at
+        FROM repositories r
+        {join_clause}
+        JOIN analyses a ON a.repo_id = r.repo_id
+        WHERE a.status = 'completed' AND COALESCE(a.purpose, 'branch') = 'branch' {where_landscape}
+        ORDER BY r.name, a.finished_at DESC
+        """,
+        filter_params,
+    )
+    seen_repos: set[str] = set()
+    portfolio: list[dict] = []
+    for r in latest_rows:
+        if r["repo_id"] not in seen_repos:
+            seen_repos.add(r["repo_id"])
+            portfolio.append(r)
+
+    if not portfolio:
+        latest_rows = db.fetchall(
+            f"""
+            SELECT r.repo_id, r.name AS repo_name, r.url, a.analysis_id, a.branch, a.commit_sha,
+                   a.health_score, a.architecture_style, a.file_count, a.loc_total, a.summary,
+                   a.macro_json, a.stats_json, a.finished_at
+            FROM repositories r
+            {join_clause}
+            JOIN analyses a ON a.repo_id = r.repo_id
+            WHERE a.status = 'completed' {where_landscape}
+            ORDER BY r.name, a.finished_at DESC
+            """,
+            filter_params,
+        )
+        for r in latest_rows:
+            if r["repo_id"] not in seen_repos:
+                seen_repos.add(r["repo_id"])
+                portfolio.append(r)
+
+    analysis_ids = [p["analysis_id"] for p in portfolio]
+    repo_names_by_aid = {p["analysis_id"]: p["repo_name"] for p in portfolio}
+
+    scope_name = "Global Portfolio" if not landscape_id else "Landscape"
+    sections = [
+        f"=== {scope_name.upper()} ({len(portfolio)} repositories) ==="
+    ]
+    for p in portfolio[:30]:
+        macro = _loads(p["macro_json"], {})
+        fws = ", ".join(f"{fw['name']} [{fw['category']}]" for fw in macro.get("frameworks", [])[:10])
+        externals = ", ".join(f"{e['name']} ({e['type']})" for e in macro.get("external_systems", [])[:10])
+        purpose = macro.get("business_purpose") or (p["summary"] or "")[:250]
+        sections.append(
+            f"• Repository: **{p['repo_name']}** (branch: {p['branch'] or 'default'}, {p['architecture_style'] or 'Service'})\n"
+            f"  - Size: {p['file_count']} files, {p['loc_total']} LOC · Health: {p['health_score']}/100\n"
+            f"  - Purpose: {purpose}\n"
+            f"  - Frameworks: {fws or 'None detected'}\n"
+            f"  - External Systems (Databases, Message Brokers, APIs): {externals or 'None'}"
+        )
+
+    # Cross-repository integrations from landscape_links
+    links_clause = ""
+    links_params: list = []
+    if landscape_id:
+        links_clause = "AND ll.landscape_id = ?"
+        links_params = [landscape_id]
+    integration_links = db.fetchall(
+        f"""
+        SELECT ll.kind, ll.direction, ll.label, ll.source_name, ll.target_name,
+               sr.name AS source_repo, tr.name AS target_repo,
+               ll.external_name, ll.external_type
+        FROM landscape_links ll
+        JOIN repositories sr ON sr.repo_id = ll.source_repo_id
+        LEFT JOIN repositories tr ON tr.repo_id = ll.target_repo_id
+        WHERE ll.status IN ('auto', 'confirmed', 'external') {links_clause}
+        ORDER BY ll.kind, sr.name
+        LIMIT 100
+        """,
+        links_params,
+    )
+    if integration_links:
+        sections.append("\n=== CROSS-REPOSITORY INTEGRATIONS & ARCHITECTURAL CONNECTIONS ===")
+        for lk in integration_links:
+            target = lk["target_repo"] or f"{lk['external_name']} ({lk['external_type']})"
+            sections.append(f"- [{lk['kind'].upper()}] {lk['source_repo']} --({lk['label'] or lk['kind']})--> {target}")
+
+    # Catalog matches across repositories
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9_-]{3,}", question) if t.lower() not in _STOP_WORDS]
+    sources: list[dict] = []
+    if tokens and analysis_ids:
+        marks = ",".join("?" for _ in analysis_ids)
+        catalog_matches: list[dict] = []
+        for token in tokens[:5]:
+            rows = db.fetchall(
+                f"""
+                SELECT c.analysis_id, c.kind, c.name, c.layer, c.summary, c.path, c.line_start, c.line_end, r.name AS repo_name
+                FROM analysis_catalog c
+                JOIN analyses a ON a.analysis_id = c.analysis_id
+                JOIN repositories r ON r.repo_id = a.repo_id
+                WHERE a.analysis_id IN ({marks}) AND (LOWER(c.name) LIKE ? OR LOWER(c.path) LIKE ?)
+                LIMIT 15
+                """,
+                [*analysis_ids, f"%{token}%", f"%{token}%"],
+            )
+            for r in rows:
+                if not any(m["name"] == r["name"] and m["repo_name"] == r["repo_name"] for m in catalog_matches):
+                    catalog_matches.append(r)
+        if catalog_matches:
+            sections.append("\n=== RELEVANT INTERFACES & CATALOG ITEMS ACROSS REPOSITORIES ===")
+            for cm in catalog_matches[:25]:
+                sections.append(f"- [{cm['repo_name']}] {cm['kind']}: `{cm['name']}` ({cm['path']}:{cm['line_start']}) — {cm['summary'][:200]}")
+                sources.append({
+                    "analysis_id": cm["analysis_id"],
+                    "repo_name": cm["repo_name"],
+                    "path": cm["path"],
+                    "scope": cm["name"],
+                    "line_start": cm["line_start"],
+                    "line_end": cm["line_end"],
+                    "score": 1.0,
+                })
+
+    # Code retrieval across top matching repositories
+    candidate_scores: dict[str, float] = {}
+    q_lower = question.lower()
+    for p in portfolio:
+        aid = p["analysis_id"]
+        rname = p["repo_name"].lower()
+        score = 0.0
+        if rname in q_lower:
+            score += 10.0
+        score += sum(2.0 for s in sources if s.get("analysis_id") == aid)
+        candidate_scores[aid] = score
+
+    sorted_aids = sorted(analysis_ids, key=lambda a: -candidate_scores.get(a, 0.0))[:3]
+    code_excerpts: list[str] = []
+    for aid in sorted_aids:
+        rname = repo_names_by_aid.get(aid, "repo")
+        hits = retrieval.search(aid, question, top=3)
+        for chunk in hits.get("chunks", []):
+            code_excerpts.append(
+                f"# [{rname}] {chunk['path']} :: {chunk['scope']} (lines {chunk['line_start']}-{chunk['line_end']})\n{chunk['content'][:2500]}"
+            )
+            sources.append({
+                "analysis_id": aid,
+                "repo_name": rname,
+                "path": chunk["path"],
+                "scope": chunk["scope"],
+                "line_start": chunk["line_start"],
+                "line_end": chunk["line_end"],
+                "score": chunk["score"],
+            })
+
+    if code_excerpts:
+        sections.append("\n=== CODE EXCERPTS FROM REPOSITORIES ===")
+        sections.extend(code_excerpts)
+
+    context = "\n".join(sections)
+    return context, sources, analysis_ids
+
+
 def ask(user: dict, session_id: str, content: str) -> dict:
     _require_chat(user)
     session = _session(user, session_id, require_owner=True)
@@ -377,9 +553,28 @@ def ask(user: dict, session_id: str, content: str) -> dict:
     if len(question) > 8000:
         raise AppError(400, "Questions must be 8000 characters or fewer")
     history = _history(session_id)
-    if session["scope_type"] == "analysis":
+    scope_type = session["scope_type"]
+
+    if scope_type in ("global", "landscape"):
+        context, sources, analysis_ids = _context_for_global(question, session["scope_id"] if scope_type == "landscape" else "")
+        system_role = (
+            "You are an enterprise software architect and lead cross-repository analyst with full visibility across all repositories in the organization.\n"
+            "You can answer questions spanning multiple repositories, explaining cross-service communication (REST APIs, Kafka/MQ event messaging, shared databases), "
+            "comparing implementations, finding endpoints and topics, and analyzing architecture across the portfolio.\n"
+            "Always state clearly which repository each service, file, endpoint, or topic belongs to."
+        )
+        guardrail_clause = ""
+    elif scope_type == "analysis":
         analysis_ids = [session["scope_id"]]
         context, sources = _context_for(session["scope_id"], question)
+        row = db.fetchone("SELECT r.name, a.branch FROM analyses a JOIN repositories r ON r.repo_id = a.repo_id WHERE a.analysis_id = ?", [session["scope_id"]])
+        repo_name = row["name"] if row else "this repository"
+        system_role = (
+            f"You are an expert software analyst for repository '{repo_name}'.\n"
+            f"Answer ONLY questions related to '{repo_name}', its code, architecture, and functionalities.\n"
+            f"If the question asks about other repositories or global cross-repo architecture, instruct the user to use the Global Chat from the left navigation panel."
+        )
+        guardrail_clause = f"\n\nGUARDRAIL: Answer ONLY if the QUESTION is about repository '{repo_name}', its code, architecture, or functionalities. If unrelated to this repository, refuse with: \"{GUARDRAIL_REFUSAL}\""
     else:
         comparison = db.fetchone("SELECT * FROM comparisons WHERE comparison_id = ?", [session["scope_id"]])
         if comparison is None:
@@ -396,18 +591,20 @@ def ask(user: dict, session_id: str, content: str) -> dict:
             f"NARRATIVE:\n{comparison['narrative'][:4000]}\n\n=== LEFT SIDE ===\n{left_context}\n\n=== RIGHT SIDE ===\n{right_context}"
         )
         sources = [{**s, "side": "left"} for s in left_sources] + [{**s, "side": "right"} for s in right_sources]
+        system_role = "You are an expert software architect comparing two codebase snapshots or branches."
+        guardrail_clause = f"\n\nGUARDRAIL: Answer ONLY if the QUESTION is about this comparison, its code diffs, architecture, or functionalities. If unrelated, refuse with: \"{GUARDRAIL_REFUSAL}\""
 
     now = db.now()
     db.insert("chat_messages", {"message_id": str(uuid.uuid4()), "session_id": session_id, "role": "user", "content": question, "sources_json": "[]", "created_at": now})
+
     if _is_off_topic_question(question, analysis_ids, context, history):
         answer = GUARDRAIL_REFUSAL
         sources = []
     elif llm.configured():
-        system = f"{llm_settings.settings_row().get('global_system_prompt', '')}\n\n{CHAT_RULES}"
+        system = f"{llm_settings.settings_row().get('global_system_prompt', '')}\n\n{system_role}\n\n{CHAT_RULES}"
         prompt = (
-            f"{context}\n\nPREVIOUS CONVERSATION:\n{history or 'none'}\n\n"
-            f"GUARDRAIL: Answer ONLY if the QUESTION is about the analysed project repository, its code, architecture, or functionalities. "
-            f"If the QUESTION is unrelated to this repository, refuse with: \"{GUARDRAIL_REFUSAL}\"\n\n"
+            f"{context}\n\nPREVIOUS CONVERSATION:\n{history or 'none'}"
+            f"{guardrail_clause}\n\n"
             f"QUESTION:\n{question}"
         )
         try:
@@ -416,13 +613,15 @@ def ask(user: dict, session_id: str, content: str) -> dict:
             answer = f"⚠️ {exc.detail}\n\n" + _offline_answer(sources)
     else:
         answer = "No LLM is configured, so here is what retrieval found in the stored analysis. Configure Gemini or Spirare under **Settings › LLM** for full answers.\n\n" + _offline_answer(sources)
+
     db.insert(
         "chat_messages",
         {"message_id": str(uuid.uuid4()), "session_id": session_id, "role": "assistant", "content": answer, "sources_json": json.dumps(sources[:16]), "created_at": db.now()},
     )
     title = session["title"]
-    if title.startswith("Chat · ") and not db.scalar("SELECT count(*) AS c FROM chat_messages WHERE session_id = ? AND role = 'assistant'", [session_id]) > 1:
-        title = question[:80] + ("…" if len(question) > 80 else "")
+    if title.startswith("Chat · ") or title == "Global Portfolio Chat":
+        if not db.scalar("SELECT count(*) AS c FROM chat_messages WHERE session_id = ? AND role = 'assistant'", [session_id]) > 1:
+            title = question[:80] + ("…" if len(question) > 80 else "")
     db.exec_sql("UPDATE chat_sessions SET updated_at = ?, title = ? WHERE session_id = ?", [db.now(), title, session_id])
     return get_session(user, session_id)
 
@@ -431,8 +630,9 @@ def _offline_answer(sources: list[dict]) -> str:
     if not sources:
         return "No matching code was found for this question."
     lines = ["**Most relevant code locations:**"]
-    for source in sources[:10]:
+    for source in sources[:12]:
         side = f"[{source['side']}] " if source.get("side") else ""
-        scope = "" if source["scope"].startswith("lines ") else f"{source['scope']} "
-        lines.append(f"- {side}`{source['path']}` — {scope}(lines {source['line_start']}-{source['line_end']})")
+        repo = f"**[{source['repo_name']}]** " if source.get("repo_name") else ""
+        scope = "" if str(source["scope"]).startswith("lines ") else f"{source['scope']} "
+        lines.append(f"- {repo}{side}`{source['path']}` — {scope}(lines {source['line_start']}-{source['line_end']})")
     return "\n".join(lines)

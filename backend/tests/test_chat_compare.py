@@ -144,3 +144,31 @@ def test_chat_guardrails_refuse_unrelated_questions(client, admin, sample_repo, 
 
     # Guardrail blocked off-topic questions before invoking the LLM
     assert len(fake_llm.calls) == calls_before
+
+
+def test_global_cross_repo_chat(client, admin, sample_repo, fake_llm):
+    a1 = _analyse(client, admin, sample_repo, "orders-service")
+    session = client.post("/api/chat/sessions", json={"scope_type": "global", "scope_id": "all"}, headers=admin).json()
+    assert session["scope_type"] == "global"
+    assert session["scope_label"] == "Global (All Repositories)"
+
+    res = client.post(f"/api/chat/sessions/{session['session_id']}/messages", json={"content": "Which services and endpoints exist across our repositories?"}, headers=admin).json()
+    reply = res["messages"][-1]
+    assert reply["role"] == "assistant"
+    system_prompt = fake_llm.calls[-1][0]
+    prompt = fake_llm.calls[-1][1]
+    assert "cross-repository analyst" in system_prompt
+    assert "GLOBAL PORTFOLIO" in prompt
+    assert "orders-service" in prompt
+
+    # Test landscape-scoped chat
+    a2 = _analyse(client, admin, sample_repo, "billing-service")
+    repos = client.get("/api/repositories", headers=admin).json()
+    land = client.post("/api/landscapes", json={"name": "Orders Landscape", "repo_ids": [repos[0]["repo_id"], repos[1]["repo_id"]]}, headers=admin).json()
+    land_session = client.post("/api/chat/sessions", json={"scope_type": "landscape", "scope_id": land["landscape_id"]}, headers=admin).json()
+    assert land_session["scope_type"] == "landscape"
+    assert "Landscape: Orders Landscape" in land_session["scope_label"]
+
+    land_res = client.post(f"/api/chat/sessions/{land_session['session_id']}/messages", json={"content": "Explain the architecture of this landscape"}, headers=admin).json()
+    assert land_res["messages"][-1]["role"] == "assistant"
+    assert "Orders Landscape" in fake_llm.calls[-1][1] or "orders-service" in fake_llm.calls[-1][1]
