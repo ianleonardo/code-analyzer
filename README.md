@@ -188,10 +188,35 @@ Everything deterministic works without an LLM.
 Predefined: Viewer (read, read, none), Analyst (write, write, none), Administrator (all write; locked). Custom roles
 can be added. The last user who can manage settings cannot be removed or demoted. Git connections are personal.
 
-## Docker
+## Docker (Linux x86 / Production)
+
+The application can be built and run on Linux x86 (`linux/amd64`) with persistent storage and environment configuration outside of Docker.
+
+### 1. Build
+```bash
+./build.sh                                     # Builds for linux/amd64 as code-analyzer:latest
+```
+
+### 2. Configure & Start
+Store data and environment variables on the host filesystem:
+- **Environment**: Reads `./.env` (copy from `.env.example`).
+- **Data storage**: Automatically mounted to `./data` outside Docker (DuckDB database, workspaces, uploads).
 
 ```bash
-docker compose up --build                                     # DuckDB in a volume, http://localhost:8001
+./start.sh                                     # Starts container on port 8001
+./start.sh 8080                                # Starts on custom port 8080
+```
+
+Access the application at `http://localhost:8001`.
+
+### 3. Stop
+```bash
+./stop.sh                                      # Gracefully stops container; data in ./data remains preserved
+```
+
+Or using Docker Compose:
+```bash
+docker compose up --build                      # DuckDB mounted to ./data, http://localhost:8001
 DB_ENGINE=postgres docker compose --profile postgres up --build   # with a PostgreSQL container
 ```
 

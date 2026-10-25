@@ -2,9 +2,12 @@
 # PostgreSQL instead:          DB_ENGINE=postgres docker compose --profile postgres up --build
 services:
   app:
-    build: .
+    build:
+      context: .
+    platform: linux/amd64
+    container_name: code-analyzer
     ports:
-      - "8001:8001"
+      - "${PORT:-8001}:8001"
     env_file:
       - path: .env
         required: false
@@ -15,18 +18,15 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8001}
     volumes:
-      - cadata:/data
+      - ${DATA_PATH:-./data}:/data
 
   postgres:
     image: postgres:16
+    platform: linux/amd64
     profiles: ["postgres"]
     environment:
       POSTGRES_USER: codeanalyzer
       POSTGRES_PASSWORD: codeanalyzer
       POSTGRES_DB: codeanalyzer
     volumes:
-      - pgdata:/var/lib/postgresql/data
-
-volumes:
-  cadata:
-  pgdata:
+      - ${PGDATA_PATH:-./data/postgres}:/var/lib/postgresql/data

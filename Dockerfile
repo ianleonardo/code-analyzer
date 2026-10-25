@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 # Code Analyzer in one image: the API and the built frontend on port 8001 (same layout as SpecForge).
+ARG TARGETPLATFORM=linux/amd64
 
 # ---- frontend build ----
 FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
@@ -12,7 +13,7 @@ COPY frontend ./frontend
 RUN npm run build -w frontend
 
 # ---- runtime ----
-FROM python:3.12-slim-bookworm
+FROM --platform=${TARGETPLATFORM} python:3.12-slim-bookworm
 ARG PIP_INDEX_URL
 ARG PIP_TRUSTED_HOST
 
