@@ -146,6 +146,7 @@ export function Shell() {
           {can(user, "repositories") && <RailLink to="/analyses" icon="query_stats" label="Runs" />}
           {can(user, "insights") && can(user, "repositories") && <RailLink to="/compare" icon="compare_arrows" label="Compare" />}
           {can(user, "repositories") && <RailLink to="/impact" icon="difference" label="Impact" />}
+          {can(user, "insights") && can(user, "repositories") && <RailLink to="/landscapes" icon="hub" label="Systems" />}
           <div className="flex-1" />
           {can(user, "insights") && can(user, "repositories") && <RailLink to="/chat" icon="forum" label="Chat" />}
           <RailLink to="/git-connections" icon="key" label="Git" />

@@ -9,6 +9,8 @@ import { AnalysisPage } from "./pages/AnalysisPage";
 import { ChatPage } from "./pages/ChatPage";
 import { CompareListPage, ComparisonPage } from "./pages/ComparePage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { LandscapePage } from "./pages/landscape/LandscapePage";
+import { LandscapesPage } from "./pages/landscape/LandscapesPage";
 import { GitConnectionsPage } from "./pages/GitConnectionsPage";
 import { FeaturesPage } from "./pages/impact/FeaturesPage";
 import { ImpactListPage } from "./pages/impact/ImpactListPage";
@@ -58,6 +60,8 @@ export function App() {
             <Route path="/compare" element={<CompareListPage />} />
             <Route path="/compare/:comparisonId" element={<ComparisonPage />} />
             <Route path="/chat" element={<ChatPage />} />
+            <Route path="/landscapes" element={<LandscapesPage />} />
+            <Route path="/landscapes/:landscapeId" element={<LandscapePage />} />
           </Route>
           <Route element={<RequireArea areas={["settings"]} />}>
             <Route path="/settings" element={<SettingsLayout />}>

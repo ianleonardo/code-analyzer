@@ -696,7 +696,84 @@ SCHEMA_V5 = [
     "CREATE INDEX IF NOT EXISTS ix_features_repo ON features (repo_id)",
 ]
 
-MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5]
+# v6: system landscapes — named groups of repositories whose interfaces are linked end to end (HTTP, messaging,
+# shared database, external systems), with review decisions that survive re-analysis
+SCHEMA_V6 = [
+    """
+    CREATE TABLE IF NOT EXISTS landscapes (
+        landscape_id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(300) NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        auto_accept VARCHAR(20) NOT NULL DEFAULT 'high_medium',
+        status VARCHAR(20) NOT NULL DEFAULT 'new',
+        message TEXT NOT NULL DEFAULT '',
+        stats_json TEXT NOT NULL DEFAULT '{}',
+        created_by VARCHAR(64) NOT NULL,
+        created_at TIMESTAMP NOT NULL,
+        updated_at TIMESTAMP NOT NULL,
+        computed_at TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS landscape_repos (
+        landscape_id VARCHAR(64) NOT NULL,
+        repo_id VARCHAR(64) NOT NULL,
+        analysis_id VARCHAR(64) NOT NULL DEFAULT '',
+        added_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (landscape_id, repo_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS landscape_links (
+        link_id VARCHAR(64) PRIMARY KEY,
+        landscape_id VARCHAR(64) NOT NULL,
+        group_key VARCHAR(1500) NOT NULL,
+        kind VARCHAR(20) NOT NULL,
+        direction VARCHAR(10) NOT NULL DEFAULT 'out',
+        source_repo_id VARCHAR(64) NOT NULL,
+        source_analysis_id VARCHAR(64) NOT NULL DEFAULT '',
+        source_key VARCHAR(1000) NOT NULL,
+        source_name VARCHAR(1000) NOT NULL DEFAULT '',
+        source_kind VARCHAR(40) NOT NULL DEFAULT '',
+        source_path VARCHAR(1000) NOT NULL DEFAULT '',
+        source_line INTEGER NOT NULL DEFAULT 0,
+        target_repo_id VARCHAR(64) NOT NULL DEFAULT '',
+        target_analysis_id VARCHAR(64) NOT NULL DEFAULT '',
+        target_key VARCHAR(1000) NOT NULL DEFAULT '',
+        target_name VARCHAR(1000) NOT NULL DEFAULT '',
+        target_kind VARCHAR(40) NOT NULL DEFAULT '',
+        target_path VARCHAR(1000) NOT NULL DEFAULT '',
+        target_line INTEGER NOT NULL DEFAULT 0,
+        external_name VARCHAR(500) NOT NULL DEFAULT '',
+        external_type VARCHAR(40) NOT NULL DEFAULT '',
+        label VARCHAR(1000) NOT NULL DEFAULT '',
+        score DOUBLE PRECISION NOT NULL DEFAULT 0,
+        confidence VARCHAR(10) NOT NULL DEFAULT '',
+        ambiguous BOOLEAN NOT NULL DEFAULT FALSE,
+        status VARCHAR(20) NOT NULL,
+        features_json TEXT NOT NULL DEFAULT '[]',
+        evidence_json TEXT NOT NULL DEFAULT '[]',
+        explanation TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMP NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS landscape_decisions (
+        landscape_id VARCHAR(64) NOT NULL,
+        group_key VARCHAR(1500) NOT NULL,
+        choice_json TEXT NOT NULL DEFAULT '{}',
+        note TEXT NOT NULL DEFAULT '',
+        decided_by VARCHAR(64) NOT NULL,
+        decided_at TIMESTAMP NOT NULL,
+        PRIMARY KEY (landscape_id, group_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_landscape_links ON landscape_links (landscape_id, kind)",
+    "CREATE INDEX IF NOT EXISTS ix_landscape_links_target ON landscape_links (target_repo_id)",
+    "CREATE INDEX IF NOT EXISTS ix_landscape_repos_repo ON landscape_repos (repo_id)",
+]
+
+MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6]
 
 TABLES = (
     "roles",
@@ -728,6 +805,10 @@ TABLES = (
     "pr_changed_symbols",
     "pr_impacted",
     "features",
+    "landscapes",
+    "landscape_repos",
+    "landscape_links",
+    "landscape_decisions",
 )
 
 # Child tables of one PR impact run, deleted together with it.

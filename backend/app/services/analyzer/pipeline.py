@@ -442,6 +442,16 @@ def _feature_catalogue(run: Run, repo_id: str, analysis_id: str, user_id: str) -
         return
     if result is not None:
         run.log(f"Feature catalogue rebuilt from {result['entries']} entry point(s): {result['created']} proposed, {result['kept']} confirmed kept", 100)
+    from app.services import landscape
+
+    try:
+        purpose = (db.fetchone("SELECT coalesce(purpose, 'branch') AS purpose FROM analyses WHERE analysis_id = ?", [analysis_id]) or {}).get("purpose")
+        updated = landscape.on_analysis_completed(repo_id, analysis_id) if purpose == "branch" else []
+    except Exception:  # noqa: BLE001
+        logger.exception("Landscape update failed for %s", analysis_id)
+        updated = []
+    if updated:
+        run.log(f"System landscape links recomputed for {len(updated)} landscape(s)", 100)
 
 
 def _edge_kinds(edges) -> dict[str, int]:

@@ -272,6 +272,9 @@ def delete_repository(user: dict, repo_id: str) -> None:
     for row in db.fetchall("SELECT analysis_id FROM analyses WHERE repo_id = ?", [repo_id]):
         analyses.delete_analysis(user, row["analysis_id"])
     db.exec_sql("DELETE FROM repositories WHERE repo_id = ?", [repo_id])
+    from app.services import landscape
+
+    landscape.delete_for_repo(repo_id)
     shutil.rmtree(config.data_dir() / "uploads" / repo_id, ignore_errors=True)
 
 

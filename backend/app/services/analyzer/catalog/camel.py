@@ -30,8 +30,9 @@ from app.services.analyzer.catalog import sql as sqlmod
 from app.services.analyzer.catalog.model import Catalog, Context, Item, SourceFile, snippet
 
 MESSAGING_SCHEMES = {
-    "kafka", "jms", "activemq", "rabbitmq", "amqp", "sqs", "aws2-sqs",
-    "google-pubsub", "azure-servicebus", "paho", "mqtt", "file", "ftp", "sftp", "aws2-s3", "ibmmq",
+    "kafka", "jms", "activemq", "artemis", "rabbitmq", "amqp", "sqs", "aws2-sqs",
+    "google-pubsub", "azure-servicebus", "paho", "mqtt", "file", "ftp", "sftp", "aws2-s3",
+    "ibmmq", "sjms", "sjms2", "stomp", "pulsar",
 }
 HTTP_SCHEMES = {
     "platform-http", "servlet", "undertow", "jetty", "netty-http", "rest", "rest-api", "cxf", "spring-ws",

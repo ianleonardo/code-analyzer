@@ -123,6 +123,10 @@ def delete_analysis(user: dict, analysis_id: str) -> None:
 
         compare.delete_comparison(user, comparison["comparison_id"], require_write=False)
     db.exec_sql("DELETE FROM analyses WHERE analysis_id = ?", [analysis_id])
+    if (row.get("purpose") or "branch") == "branch":
+        from app.services import landscape
+
+        landscape.on_analysis_removed(row["repo_id"], analysis_id)
 
 
 def list_files(user: dict, analysis_id: str, *, q: str = "", layer: str = "", role: str = "", language: str = "", container: str = "",

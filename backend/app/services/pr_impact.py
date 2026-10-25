@@ -593,7 +593,21 @@ def get_run(user: dict, run_id: str) -> dict:
                            "flags": _loads(s["flags_json"], []), "logic": _loads(s["logic_json"], {})} for s in symbols]
     starter = db.fetchone("SELECT username FROM users WHERE user_id = ?", [row["started_by"]])
     payload["started_by_name"] = starter["username"] if starter else row["started_by"]
+    payload["cross_repo"] = _cross_repo(row["repo_id"], payload["result"])
     return payload
+
+
+def _cross_repo(repo_id: str, result: dict) -> dict:
+    """Consumers in other repositories (from the system landscapes this repository belongs to) of the affected
+    endpoints, and of topics published from changed or impacted files. Computed when viewed, so landscapes created
+    after the run still apply."""
+    from app.services import landscape
+
+    if not result or not landscape.in_any_landscape(repo_id):
+        return {"in_landscape": False, "consumers": []}
+    keys = [e["item_key"] for e in result.get("entry_points") or [] if e.get("item_key")]
+    paths = [f["path"] for f in result.get("files") or []] + [i["path"] for i in result.get("impacted") or []]
+    return {"in_landscape": True, "consumers": landscape.consumers_of(repo_id, keys, paths)}
 
 
 def file_diff(user: dict, run_id: str, path: str) -> dict:
@@ -944,6 +958,21 @@ def run_markdown(user: dict, run_id: str) -> str:
                     add(f"- **[{str(c.get('severity', '')).upper()}]** {c.get('category')}: {c.get('title')}" + (f" (`{c['path']}`)" if c.get("path") else ""))
                 add("")
 
+    cross = run.get("cross_repo") or {}
+    if cross.get("in_landscape"):
+        consumers = cross.get("consumers") or []
+        add(f"## Consumers in Other Repositories ({len(consumers)})")
+        add("")
+        if consumers:
+            add("| Interface | Type | Consumer repository | Consumer | Location | Landscape |")
+            add("| :--- | :--- | :--- | :--- | :--- | :--- |")
+            for c in consumers[:REPORT_LIMIT]:
+                add(f"| `{_cell(c['interface'])}` | {c['kind']} | {_cell(c['consumer_repo'])} | {_cell(c['consumer'])} | `{_cell(c['where'])}` | {_cell(c['landscape'])} |")
+            more(consumers, REPORT_LIMIT, "consumer(s)")
+        else:
+            add("No repository in this repository's system landscapes consumes the affected endpoints or topics.")
+        add("")
+
     reviewers = r.get("reviewers") or []
     if reviewers:
         add("## Suggested Reviewers")
@@ -956,6 +985,8 @@ def run_markdown(user: dict, run_id: str) -> str:
         add("## Limits of This Analysis")
         add("")
         for item in r["limits"]:
+            if cross.get("in_landscape") and item.startswith("Consumers in other repositories"):
+                item = "Consumers in other repositories are taken from the system landscapes this repository belongs to; repositories outside them are not analysed."
             add(f"- {item}")
         add("")
     return "\n".join(lines).rstrip() + "\n"

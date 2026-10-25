@@ -59,7 +59,15 @@ function styleC4(source: string): string {
  * - Mouse wheel scroll-to-zoom (towards cursor)
  * - Re-align / Fit & center button + orientation toggle for flowcharts
  */
-export function Mermaid({ source, className = "" }: { source: string; className?: string }) {
+export function Mermaid({
+  source,
+  className = "",
+  onEdgeClick,
+}: {
+  source: string;
+  className?: string;
+  onEdgeClick?: (edgeIndex: number, labelText: string, edgeId?: string) => void;
+}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
@@ -68,6 +76,7 @@ export function Mermaid({ source, className = "" }: { source: string; className?
   const [pan, setPan] = useState({ x: 16, y: 16 });
   const [dragging, setDragging] = useState(false);
   const [flowDir, setFlowDir] = useState<"TB" | "LR" | null>(null);
+  const dragMoved = useRef(false);
   const dragStart = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
   const [showSource, setShowSource] = useState(false);
 
@@ -166,6 +175,69 @@ export function Mermaid({ source, className = "" }: { source: string; className?
         const { svg } = await mermaid.render(id, text);
         if (!cancelled && host.current) {
           host.current.innerHTML = svg;
+
+          if (onEdgeClick) {
+            const edgeLabels = host.current.querySelectorAll<SVGGElement>(".edgeLabels .edgeLabel");
+            const edgePaths = host.current.querySelectorAll<SVGElement>(".edgePaths .edgePath, .edgePaths path");
+
+            edgeLabels.forEach((el, idx) => {
+              el.style.cursor = "pointer";
+              el.style.pointerEvents = "all";
+              const text = el.textContent?.trim() || "";
+              const labelG = el.querySelector(".label");
+              const edgeId = labelG?.getAttribute("data-id") || el.getAttribute("id") || "";
+
+              const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
+              titleEl.textContent = `Click to view interfaces (${text})`;
+              el.appendChild(titleEl);
+
+              el.addEventListener("mouseenter", () => {
+                el.style.filter = "drop-shadow(0 0 6px rgba(var(--primary), 0.8))";
+                el.style.transform = "scale(1.08)";
+                el.style.transformOrigin = "center";
+                el.style.transition = "transform 0.15s ease, filter 0.15s ease";
+              });
+              el.addEventListener("mouseleave", () => {
+                el.style.filter = "";
+                el.style.transform = "";
+              });
+
+              el.addEventListener("click", (ev) => {
+                if (dragMoved.current) return;
+                ev.stopPropagation();
+                onEdgeClick(idx, text, edgeId);
+              });
+            });
+
+            edgePaths.forEach((pathEl, idx) => {
+              pathEl.style.cursor = "pointer";
+              pathEl.style.pointerEvents = "all";
+              const labelEl = edgeLabels[idx];
+              const edgeId = pathEl.getAttribute("id") || "";
+              const text = labelEl?.textContent?.trim() || "";
+
+              const titleEl = document.createElementNS("http://www.w3.org/2000/svg", "title");
+              titleEl.textContent = text ? `Click to view interfaces (${text})` : "Click to view interfaces";
+              pathEl.appendChild(titleEl);
+
+              pathEl.addEventListener("mouseenter", () => {
+                pathEl.style.filter = "drop-shadow(0 0 5px rgba(var(--primary), 0.9))";
+                pathEl.style.strokeWidth = "4px";
+                pathEl.style.transition = "stroke-width 0.15s ease, filter 0.15s ease";
+              });
+              pathEl.addEventListener("mouseleave", () => {
+                pathEl.style.filter = "";
+                pathEl.style.strokeWidth = "";
+              });
+
+              pathEl.addEventListener("click", (ev) => {
+                if (dragMoved.current) return;
+                ev.stopPropagation();
+                onEdgeClick(idx, text, edgeId);
+              });
+            });
+          }
+
           requestAnimationFrame(() => {
             if (!cancelled) {
               const vp = viewportRef.current;
@@ -260,10 +332,14 @@ export function Mermaid({ source, className = "" }: { source: string; className?
           onMouseDown={(event) => {
             if (event.button !== 0) return;
             setDragging(true);
+            dragMoved.current = false;
             dragStart.current = { x: event.clientX, y: event.clientY, px: pan.x, py: pan.y };
           }}
           onMouseMove={(event) => {
             if (!dragStart.current) return;
+            if (Math.hypot(event.clientX - dragStart.current.x, event.clientY - dragStart.current.y) > 4) {
+              dragMoved.current = true;
+            }
             setPan({
               x: dragStart.current.px + (event.clientX - dragStart.current.x),
               y: dragStart.current.py + (event.clientY - dragStart.current.y),

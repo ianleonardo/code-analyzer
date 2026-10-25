@@ -59,7 +59,7 @@ def require(user: dict, area: str, need: str = "read") -> None:
 
 _REPOSITORIES = {"repositories", "analyses", "git", "impact-runs", "features"}
 _INSIGHTS_READ_ONLY = {"chat"}  # chatting is a read of the stored analysis
-_INSIGHTS = {"comparisons"}
+_INSIGHTS = {"comparisons", "landscapes"}
 _SETTINGS = {"settings", "users", "roles", "audit", "database"}
 # Changing requests that only read: checking access to a remote repository.
 _READ_POSTS = {"git/check", "git/branches"}
@@ -69,7 +69,7 @@ def rule_for(method: str, path: str) -> list[list[tuple[str, str]]]:
     """A list of requirements that must all hold, each met by any one (area, level) option. Empty: any signed-in user."""
     route = path.split("/api/", 1)[-1].strip("/")
     first = route.split("/", 1)[0]
-    reading = method in ("GET", "HEAD", "OPTIONS")
+    reading = method in ("GET", "HEAD", "OPTIONS") or (first == "landscapes" and route.endswith("/explain"))  # explaining a link only reads
     if first == "git":
         if route.startswith("git/credentials") or route.startswith("git/oauth"):
             return []  # personal git connections

@@ -85,8 +85,21 @@ and **Light Laboratory** modes.
   contribution). With an LLM configured it reads the before / after logic of the riskiest changed functions (claims
   cross-checked against the code, cached by content hash) and writes the narrative, description-vs-diff drift and a
   review checklist; the risk label stays deterministic. The PR head is never built or run.
-- **Feature catalogue** (repository › Features) — features proposed from the entry points (LLM, or by route / folder),
-  confirmed and edited by users with route / path / item / name patterns; PR impact groups entry points by them.
+- **Feature catalogue** (repository › Features) — built automatically after each analysis of the default branch from
+  the entry points (LLM, or by route / folder); users confirm and edit features with route / path / item / name patterns
+  (confirmed features are never replaced); PR impact groups entry points by them.
+- **System landscapes** (rail › Systems) — named groups of repositories linked end to end from their layer catalogues:
+  *HTTP* (screens, Retrofit / Feign / RestTemplate / WebClient / fetch / URLSession calls → endpoints in another
+  repository, using method + path template, context path, base-URL configuration per profile, host and service names),
+  *messaging* (Kafka / RabbitMQ / JMS / SQS publisher → consumers), *shared database* tables (same datasource / engine;
+  device-local stores excluded) and *external* systems (unmatched hosts, brokers, databases, partner APIs). Every link
+  has a score, a confidence and its evidence. Auto-accept is configurable per landscape (*high* or *high + medium*,
+  default); ambiguous or doubtful links wait in a **Review** queue whose popup shows the call site, every candidate with
+  evidence and code, and an explanation (rules, or the LLM) — confirm one or several, mark external, or reject; decisions
+  are re-applied when the links are recomputed after a new analysis. Views: system map (filter by link type / feature),
+  provided interfaces with their consumers, end-to-end **journeys** as sequence diagrams (screen → API → service →
+  topic → consumer → table), all links; export to Markdown, PDF and Excel. PR impact lists the **consumers in other
+  repositories** of the affected endpoints and topics.
 - **Admin** (as in SpecForge) — LLM (Gemini, Spirare; encrypted write-only keys; active provider; test connection),
   Users (local or Active Directory), User Roles (none/read/write on *Repositories*, *Insights*, *Settings*), Database,
   Audit Log.

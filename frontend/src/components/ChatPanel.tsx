@@ -5,6 +5,19 @@ import type { ChatSession } from "../types";
 import { ConfirmDialog, ErrorNote, Markdown, Spinner, SplitPane } from "./ui";
 
 const STARTERS: Record<string, string[]> = {
+  global: [
+    "How do services communicate with each other (APIs, messaging, databases)?",
+    "Which repositories publish or consume event messages (Kafka, MQ)?",
+    "List all external databases and third-party APIs used across repositories.",
+    "Summarise the architecture style and business purpose of each repository.",
+    "Which repositories have the highest technical debt or architectural risks?",
+  ],
+  landscape: [
+    "Explain the end-to-end data flow between services in this landscape.",
+    "Which cross-repository APIs and messaging topics connect these services?",
+    "Are there shared databases or tight couplings between repositories in this landscape?",
+    "What are the main architectural risks across these member repositories?",
+  ],
   analysis: [
     "What is the business purpose of this repository and its main capabilities?",
     "Walk me through the request flow from an API endpoint to the database.",
@@ -21,8 +34,8 @@ const STARTERS: Record<string, string[]> = {
   ],
 };
 
-/** Conversations grounded in a stored analysis or comparison. With `scopeId` the panel lists only that scope's chats. */
-export function ChatPanel({ scopeType, scopeId, compact = false }: { scopeType: "analysis" | "comparison"; scopeId: string; compact?: boolean }) {
+/** Conversations grounded in a stored analysis, comparison, or global portfolio. */
+export function ChatPanel({ scopeType, scopeId, compact = false }: { scopeType: "analysis" | "comparison" | "global" | "landscape"; scopeId: string; compact?: boolean }) {
   const navigate = useNavigate();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [current, setCurrent] = useState<ChatSession | null>(null);
@@ -250,12 +263,18 @@ export function ChatPanel({ scopeType, scopeId, compact = false }: { scopeType: 
             <div className="mb-3 flex items-center gap-2">
               <span className="material-symbols-outlined icon-lg text-primary">psychology</span>
               <div>
-                <p className="text-head-md">Chat with Analyst</p>
-                <p className="text-body-md text-muted">Answers come from the stored analysis — structure, file roles, graph and code — so they work offline and cite files.</p>
+                <p className="text-head-md">{scopeType === "global" ? "Global Cross-Repository Analyst" : scopeType === "landscape" ? "Landscape Analyst" : "Chat with Analyst"}</p>
+                <p className="text-body-md text-muted">
+                  {scopeType === "global"
+                    ? "Ask questions across all repositories, services, APIs, event messaging, and system architectures in the organization."
+                    : scopeType === "landscape"
+                    ? "Ask questions about the services, shared databases, and integration flows in this landscape."
+                    : "Answers come from the stored analysis — structure, file roles, graph and code — so they work offline and cite files."}
+                </p>
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {STARTERS[scopeType].map((q) => (
+              {(STARTERS[scopeType] ?? STARTERS.analysis).map((q) => (
                 <button key={q} type="button" className="border border-line bg-surface px-3 py-2 text-left text-body-md hover:border-primary" onClick={() => void send(q)}>
                   {q}
                 </button>
@@ -296,10 +315,11 @@ export function ChatPanel({ scopeType, scopeId, compact = false }: { scopeType: 
                         <button
                           key={index}
                           type="button"
-                          title={`${source.path} :: ${source.scope}`}
+                          title={`${source.repo_name ? `[${source.repo_name}] ` : ""}${source.path} :: ${source.scope}`}
                           className="chip h-5 border-line-strong text-muted normal-case tracking-normal hover:border-primary hover:text-primary"
                           onClick={() => navigate(`/analyses/${source.analysis_id}?tab=inspector&file=${encodeURIComponent(source.path)}${source.line_start ? `&line=${source.line_start}` : ""}`)}
                         >
+                          {source.repo_name && <span className="font-semibold text-primary/80 mr-0.5">[{source.repo_name}]</span>}
                           {source.side && <span className="text-primary">{source.side === "left" ? "L" : "R"}</span>}
                           {source.path.split("/").pop()}
                           {source.scope && source.scope !== "(file)" && <span className="text-faint">::{source.scope.split(".").pop()}</span>}
@@ -332,7 +352,15 @@ export function ChatPanel({ scopeType, scopeId, compact = false }: { scopeType: 
           <textarea
             className="field min-h-[44px] flex-1 resize-none font-sans text-body-lg"
             rows={2}
-            placeholder="Ask only about this repository's code, architecture, flows, and functionalities… (Enter to send, Shift+Enter for a new line)"
+            placeholder={
+              scopeType === "global"
+                ? "Ask across all repositories, services, APIs, event messaging, and architecture… (Enter to send, Shift+Enter for a new line)"
+                : scopeType === "landscape"
+                ? "Ask about services, data flows, and integrations in this landscape… (Enter to send, Shift+Enter for a new line)"
+                : scopeType === "comparison"
+                ? "Ask about differences between the two snapshots… (Enter to send, Shift+Enter for a new line)"
+                : "Ask only about this repository's code, architecture, flows, and functionalities… (Enter to send, Shift+Enter for a new line)"
+            }
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {

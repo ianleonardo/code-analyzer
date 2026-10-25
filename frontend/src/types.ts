@@ -201,7 +201,7 @@ export type GraphEdge = { source_path: string; target_path: string; kind: string
 
 export type TreeNode = { name: string; path: string; type: "dir" | "file"; files?: number; loc: number; layers?: Record<string, number>; layer?: Layer; role?: string; language?: string; complexity?: number; is_test?: boolean; fan_in?: number; scc_id?: number | null; children?: TreeNode[] };
 
-export type ChatSource = { analysis_id: string; path: string; scope: string; line_start: number; line_end: number; score: number; side?: "left" | "right" };
+export type ChatSource = { analysis_id: string; repo_name?: string; path: string; scope: string; line_start: number; line_end: number; score: number; side?: "left" | "right" };
 export type ChatMessage = { message_id: string; role: "user" | "assistant"; content: string; sources: ChatSource[]; created_at: string };
 export type ChatSession = {
   session_id: string;
@@ -209,7 +209,7 @@ export type ChatSession = {
   owner_name?: string;
   is_public?: boolean;
   is_owner?: boolean;
-  scope_type: "analysis" | "comparison";
+  scope_type: "analysis" | "comparison" | "global" | "landscape";
   scope_id: string;
   title: string;
   scope_label?: string;
@@ -371,9 +371,11 @@ export type ImpactResult = {
   stats: ImpactStats; limits: string[];
 };
 export type ImpactNarrative = { summary?: string; risk_explanation?: string; features?: { feature: string; summary: string }[]; description_drift?: string[]; review_checklist?: string[]; source?: "llm" | "rules" };
+export type CrossRepoConsumer = { landscape_id: string; landscape: string; kind: string; interface: string; consumer_repo_id: string; consumer_repo: string; consumer: string; where: string; status: string; confidence: string };
 export type ImpactRun = ImpactRunBrief & {
   repo: { repo_id: string; name: string; source_type: string; url: string; default_branch: string };
   result: ImpactResult; narrative: ImpactNarrative; symbols: ChangedSymbol[]; started_by_name: string;
+  cross_repo?: { in_landscape: boolean; consumers: CrossRepoConsumer[] };
   pull_request: { number: number; title: string; author: string; description: string; url: string; source_branch: string; target_branch: string; state: string; head_sha: string } | null;
 };
 export type ImpactEvent = { event_id: string; run_id: string; ts: string; level: string; message: string };

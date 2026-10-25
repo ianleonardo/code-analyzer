@@ -239,6 +239,7 @@ function SummaryTab({ run }: { run: ImpactRun }) {
           )}
         </section>
       </div>
+      <CrossRepoPanel run={run} />
       <section className="panel p-3">
         <div className="label-micro">Limits of this analysis</div>
         <ul className="mt-1 list-disc space-y-0.5 pl-5 text-body-sm text-muted">
@@ -248,6 +249,47 @@ function SummaryTab({ run }: { run: ImpactRun }) {
         </ul>
       </section>
     </>
+  );
+}
+
+/** Consumers in other repositories (from the system landscapes this repository belongs to) of what the change affects. */
+function CrossRepoPanel({ run }: { run: ImpactRun }) {
+  const cross = run.cross_repo;
+  if (!cross) return null;
+  if (!cross.in_landscape) {
+    return (
+      <section className="panel p-3 text-body-md text-muted">
+        <span className="label-micro">Consumers in other repositories · </span>
+        This repository is not in a <Link className="link" to="/landscapes">system landscape</Link> yet, so callers in other repositories are not known.
+      </section>
+    );
+  }
+  const byInterface: Record<string, typeof cross.consumers> = {};
+  for (const c of cross.consumers) (byInterface[`${c.kind}|${c.interface}`] ??= []).push(c);
+  return (
+    <section className="panel">
+      <div className="panel-head"><span>Consumers in other repositories</span><span className={cross.consumers.length ? "text-warning" : ""}>{cross.consumers.length}</span></div>
+      {!cross.consumers.length && <p className="p-3 text-body-md text-muted">No repository in this repository&apos;s system landscapes consumes the affected endpoints or topics.</p>}
+      {Object.entries(byInterface).map(([key, consumers]) => (
+        <div key={key} className="border-b border-line/60 px-3 py-2">
+          <div className="flex items-center gap-2 font-mono text-code">
+            <span className={`chip ${consumers[0].kind === "http" ? "border-layer-api/50 text-layer-api" : "border-layer-service/50 text-layer-service"}`}>{consumers[0].kind}</span>
+            {consumers[0].interface}
+          </div>
+          <ul className="mt-1 space-y-0.5 pl-2">
+            {consumers.map((c, i) => (
+              <li key={i} className="flex flex-wrap items-center gap-2 text-body-sm">
+                <span className="material-symbols-outlined icon-sm text-warning">subdirectory_arrow_right</span>
+                <span className="font-mono text-primary">{c.consumer_repo}</span>
+                <span className="font-mono text-muted">{c.consumer}</span>
+                <span className="font-mono text-micro text-faint">{c.where}</span>
+                <Link className="link text-micro" to={`/landscapes/${c.landscape_id}?tab=interfaces`}>{c.landscape}</Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
   );
 }
 
