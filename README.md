@@ -197,10 +197,21 @@ The application can be built and run on Linux x86 (`linux/amd64`) with persisten
 ./build.sh                                     # Builds for linux/amd64 as code-analyzer:latest
 ```
 
-### 2. Configure & Start
-Store data and environment variables on the host filesystem:
-- **Environment**: Reads `./.env` (copy from `.env.example`).
-- **Data storage**: Automatically mounted to `./data` outside Docker (DuckDB database, workspaces, uploads).
+### 2. Export & Transfer to Server (Optional)
+If running on a remote server without rebuilding from source:
+```bash
+./save.sh                                      # Exports image to code-analyzer-x86_64.tar.gz
+```
+Copy the archive, scripts, and `.env` to your server:
+```bash
+scp code-analyzer-x86_64.tar.gz start.sh stop.sh .env user@your-server:/opt/code-analyzer/
+```
+
+### 3. Start (Auto-loads Image)
+When you run `./start.sh`, it checks whether the image is already loaded in Docker. If not, it automatically loads `code-analyzer-x86_64.tar.gz` first, then starts the container:
+
+- **Environment**: Reads external `./.env` (copy from `.env.example`).
+- **Data storage**: Automatically mounted to `./data` on your host filesystem (DuckDB database, workspaces, uploads).
 
 ```bash
 ./start.sh                                     # Starts container on port 8001
@@ -209,7 +220,7 @@ Store data and environment variables on the host filesystem:
 
 Access the application at `http://localhost:8001`.
 
-### 3. Stop
+### 4. Stop
 ```bash
 ./stop.sh                                      # Gracefully stops container; data in ./data remains preserved
 ```
