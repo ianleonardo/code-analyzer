@@ -592,6 +592,34 @@ def test_catalog_api(client, admin, polyglot):
     # chat retrieval sees catalogue facts
     hits = client.get(f"/api/analyses/{analysis_id}/search", params={"q": "ORDERS"}, headers=admin)
     assert hits.status_code == 200
+
+    # Screen wireframe test: Option A (deterministic, default) & Option B (LLM)
+    screens = client.get(f"/api/analyses/{analysis_id}/catalog/items", params={"layer": "ui", "kind": "screen"}, headers=admin).json()["items"]
+    assert len(screens) >= 1
+    screen_item = screens[0]
+    
+    # Option A (default mode = deterministic)
+    wf_det = client.get(f"/api/analyses/{analysis_id}/catalog/items/{screen_item['item_id']}/wireframe", headers=admin).json()
+    assert wf_det["mode"] == "deterministic"
+    assert wf_det["platform"] in ("Android", "iOS", "Web")
+    assert "fields" in wf_det and "actions" in wf_det
+
+    # Option B (mode = llm with mocked completion)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr("app.services.llm.configured", lambda: True)
+    monkeypatch.setattr("app.services.llm.complete", lambda system, user, temperature=0.2: "<html><body><div class='wireframe'>Mocked Screen</div></body></html>")
+    try:
+        wf_llm = client.get(f"/api/analyses/{analysis_id}/catalog/items/{screen_item['item_id']}/wireframe", params={"mode": "llm"}, headers=admin).json()
+        assert wf_llm["mode"] == "llm"
+        assert "Mocked Screen" in wf_llm["html"]
+        assert not wf_llm["cached"]
+
+        # Cached on second request
+        wf_llm_cached = client.get(f"/api/analyses/{analysis_id}/catalog/items/{screen_item['item_id']}/wireframe", params={"mode": "llm"}, headers=admin).json()
+        assert wf_llm_cached["cached"]
+    finally:
+        monkeypatch.undo()
+
     viewer = __import__("tests.conftest", fromlist=["login"]).login(client, "viewer", "ViewerPass123!")
     assert client.post(f"/api/analyses/{analysis_id}/catalog/rebuild", headers=viewer).status_code == 403
     assert client.get(f"/api/analyses/{analysis_id}/catalog", headers=viewer).status_code == 200
@@ -805,5 +833,103 @@ def test_ocp_java_kotlin_swift_html_react_enhancements():
     assert _links(res, "ui:web/src/components/BillingTab.tsx", "api:POST /api/payments/{paymentId}/capture", "calls")
     assert "ui:portal/index.html" in res.items and "ui:portal/details.html" in res.items
     assert _links(res, "ui:portal/index.html", "ui:portal/details.html", "navigates to")
+
+
+def test_swift_service_url_config_and_api_clients():
+    sources = [
+        SourceFile(
+            "CartApp/Networking/APIConfig.swift", "Swift", "code", "infra", "Configuration", False, "",
+            textwrap.dedent("""
+                import Foundation
+                enum APIConfig {
+                    private static let defaults = UserDefaults.standard
+                    static var inventoryBaseURL: URL {
+                        url(forKey: "inventoryBaseURL", env: "INVENTORY_BASE_URL", fallback: "http://localhost:8081")
+                    }
+                    static var orderBaseURL: URL {
+                        url(forKey: "orderBaseURL", env: "ORDER_BASE_URL", fallback: "http://localhost:8083")
+                    }
+                    static let apiPrefix = "/api/v1"
+                    static func inventoryURL(_ path: String) -> URL? {
+                        URL(string: inventoryBaseURL.absoluteString + apiPrefix + path)
+                    }
+                    static func orderURL(_ path: String) -> URL? {
+                        URL(string: orderBaseURL.absoluteString + apiPrefix + path)
+                    }
+                    private static func url(forKey key: String, env: String, fallback: String) -> URL {
+                        URL(string: fallback)!
+                    }
+                }
+            """).strip(),
+        ),
+        SourceFile(
+            "CartApp/Networking/InventoryService.swift", "Swift", "code", "service", "Service", False, "",
+            textwrap.dedent("""
+                import Foundation
+                struct InventoryService {
+                    private let client: APIClient
+                    init(client: APIClient = .shared) {
+                        self.client = client
+                    }
+                    func fetchProducts() async throws -> [Product] {
+                        guard let url = APIConfig.inventoryURL("/products") else {
+                            throw CartAPIError.invalidURL
+                        }
+                        return try await client.get(url)
+                    }
+                    func fetchProduct(id: String) async throws -> Product {
+                        guard let url = APIConfig.inventoryURL("/products/\\(id)") else {
+                            throw CartAPIError.invalidURL
+                        }
+                        return try await client.get(url)
+                    }
+                }
+            """).strip(),
+        ),
+        SourceFile(
+            "CartApp/Networking/OrderService.swift", "Swift", "code", "service", "Service", False, "",
+            textwrap.dedent("""
+                import Foundation
+                struct OrderService {
+                    private let client: APIClient
+                    init(client: APIClient = .shared) {
+                        self.client = client
+                    }
+                    func createCart() async throws -> Cart {
+                        guard let url = APIConfig.orderURL("/carts") else {
+                            throw CartAPIError.invalidURL
+                        }
+                        return try await client.postEmpty(url)
+                    }
+                    func updateItem(cartId: String, productId: String, quantity: Int) async throws -> Cart {
+                        guard let url = APIConfig.orderURL("/carts/\\(cartId)/items/\\(productId)") else {
+                            throw CartAPIError.invalidURL
+                        }
+                        return try await client.patch(url, body: quantity)
+                    }
+                }
+            """).strip(),
+        ),
+    ]
+    res = build(sources, [], [], ["Swift"])
+    assert res.extra["stats"]["errors"] == []
+
+    # API Clients extracted with resolved base URLs and API prefix
+    assert "client:GET /api/v1/products" in res.items
+    assert "client:GET /api/v1/products/{id}" in res.items
+    assert "client:POST /api/v1/carts" in res.items
+    assert "client:PATCH /api/v1/carts/{cartId}/items/{productId}" in res.items
+
+    prod_client = res.items["client:GET /api/v1/products"]
+    assert prod_client.details["base_url"] == "http://localhost:8081"
+    assert prod_client.details["target"] == "inventory"
+
+    cart_client = res.items["client:POST /api/v1/carts"]
+    assert cart_client.details["base_url"] == "http://localhost:8083"
+    assert cart_client.details["target"] == "order"
+
+    # Services link to their respective API clients
+    assert _links(res, "svc:InventoryService", "client:GET /api/v1/products", "calls")
+    assert _links(res, "svc:OrderService", "client:POST /api/v1/carts", "calls")
 
 

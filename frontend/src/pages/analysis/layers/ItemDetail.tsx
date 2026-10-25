@@ -3,12 +3,13 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, errorText } from "../../../api";
 import { Mermaid } from "../../../components/Mermaid";
 import { ErrorNote, LayerPill, Spinner } from "../../../components/ui";
+import { ScreenWireframe } from "./ScreenWireframe";
 import { KIND_ICON, METHOD_CLASS, type CatalogItem, type Details, type LinkRef, type Trace } from "./types";
 
 type Nav = { onSelect: (itemId: string) => void; onOpenFile: (path: string, line?: number, end?: number) => void };
 
 export function MethodBadge({ method }: { method: string }) {
-  return <span className={`chip w-14 justify-center ${METHOD_CLASS[method] ?? METHOD_CLASS.ANY}`}>{method || "—"}</span>;
+  return <span className={`chip w-16 justify-start text-left px-1.5 shrink-0 ${METHOD_CLASS[method] ?? METHOD_CLASS.ANY}`}>{method || "—"}</span>;
 }
 
 function Section({ title, right, children, empty }: { title: ReactNode; right?: ReactNode; children: ReactNode; empty?: boolean }) {
@@ -300,40 +301,87 @@ function TableBody({ item, d, nav, analysisId }: { item: CatalogItem; d: Details
   );
 }
 
-function ScreenBody({ d, line }: { d: Details; line: (n: number) => void }) {
+function ScreenBody({ analysisId, item, d, line }: { analysisId: string; item: CatalogItem; d: Details; line: (n: number) => void }) {
+  const [activeTab, setActiveTab] = useState<"wireframe" | "specs">("wireframe");
+
   return (
     <>
-      <Section title="Screen">
-        <KV rows={[["Platform · type", `${d.platform} · ${d.type}`], ["Title", d.title], ["Routes", <Chips values={d.routes ?? []} className="border-layer-ui/40 text-ink" />], ["Rendered by", (d.rendered_by ?? []).join(", ")],
-          ["Layout / storyboard", d.layout || d.storyboard], ["View models", <Chips values={d.view_models ?? []} />], ["Components", (d.components ?? []).map((c: any) => c.name).join(", ")],
-          ["Launcher", d.launcher ? "yes (MAIN / LAUNCHER)" : ""], ["Deep links", (d.deep_links ?? []).map((x: any) => `${x.scheme}://${x.host ?? ""}${x.path ?? x.pathPrefix ?? ""}`).join(", ")]]} />
-      </Section>
-      <Section title="Fields" right={<span>{d.fields?.length ?? 0}</span>} empty={!d.fields?.length}>
-        <Table head={["Field", "Widget", "Type", "Label", "Required", "Client validation", "Server validation"]} rows={(d.fields ?? []).map((f: any) => [
-          <button type="button" className="hover:text-primary" onClick={() => f.line && line(f.line)}>{f.name}</button>, <span className="text-muted">{f.widget}{f.section ? ` · ${f.section}` : ""}</span>, f.type, f.label,
-          f.required ? <span className="text-warning">yes</span> : "", <Validations values={[...(f.validations ?? []), ...(f.validation ? [f.validation] : [])]} />,
-          f.server_validations?.length ? <div title={f.bound_to}><Validations values={f.server_validations} /></div> : "",
-        ])} />
-      </Section>
-      <Section title="Actions" empty={!d.actions?.length && !d.forms?.length}>
-        <Table head={["Label", "Widget", "Handler / submit", "Enabled when"]} rows={[
-          ...(d.actions ?? []).map((a: any) => [a.label, a.widget + (a.kind ? ` (${a.kind})` : ""), <span className="text-muted">{a.handler}</span>, a.enabled || a.disabled || ""]),
-          ...(d.forms ?? []).map((f: any) => ["form", f.method || "", f.action || f.on_submit || "(posts to the current URL)", f.object ? `binds ${f.object}` : ""]),
-        ]} />
-      </Section>
-      <Section title="Backend calls" right={<span>{d.backend_calls?.length ?? 0}</span>} empty={!d.backend_calls?.length}>
-        <Table head={["Method", "URL", "Via", "Backend endpoint"]} rows={(d.backend_calls ?? []).map((c: any) => [
-          <MethodBadge method={c.method} />, c.url, <span className="text-muted">{c.via}{c.function ? ` · ${c.function}()` : ""}{c.component ? ` · ${c.component}` : ""}</span>,
-          c.endpoint ? <span className="text-ok">{c.endpoint.replace(/^api:/, "")}</span> : <span className="text-faint">not in this repo</span>,
-        ])} />
-      </Section>
-      <Section title="Navigation" empty={!d.navigation?.length}>
-        <Table head={["Target", "Via", "Line"]} rows={(d.navigation ?? []).map((n: any) => [n.target, n.via, n.line ? `L${n.line}` : ""])} />
-      </Section>
-      <Section title="State" empty={!d.state?.length}>
-        <Chips values={(d.state ?? []).map((s: any) => (typeof s === "string" ? s : `${s.wrapper ? "@" + s.wrapper + " " : ""}${s.name}${s.from ? " ← " + s.from : ""}`))} />
-      </Section>
-      <Rules rules={d.rules} llm={d.llm_rules} onLine={line} />
+      <div className="flex items-center justify-between border-b border-line pb-2 mb-2">
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            className={`btn h-8 text-body-sm ${activeTab === "wireframe" ? "btn-primary" : ""}`}
+            onClick={() => setActiveTab("wireframe")}
+          >
+            <span className="material-symbols-outlined icon-sm">devices</span>
+            Visual Wireframe
+          </button>
+          <button
+            type="button"
+            className={`btn h-8 text-body-sm ${activeTab === "specs" ? "btn-primary" : ""}`}
+            onClick={() => setActiveTab("specs")}
+          >
+            <span className="material-symbols-outlined icon-sm">table_rows</span>
+            Fields & Specifications ({d.fields?.length ?? 0})
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "wireframe" ? (
+        <div className="space-y-4">
+          <ScreenWireframe
+            analysisId={analysisId}
+            itemId={item.item_id}
+            itemName={item.name}
+            itemPath={item.path}
+            d={d}
+            onLine={line}
+          />
+          <Section title="Backend calls" right={<span>{d.backend_calls?.length ?? 0}</span>} empty={!d.backend_calls?.length}>
+            <Table head={["Method", "URL", "Via", "Backend endpoint"]} rows={(d.backend_calls ?? []).map((c: any) => [
+              <MethodBadge method={c.method} />, c.url, <span className="text-muted">{c.via}{c.function ? ` · ${c.function}()` : ""}{c.component ? ` · ${c.component}` : ""}</span>,
+              c.endpoint ? <span className="text-ok">{c.endpoint.replace(/^api:/, "")}</span> : <span className="text-faint">not in this repo</span>,
+            ])} />
+          </Section>
+          <Section title="Navigation" empty={!d.navigation?.length}>
+            <Table head={["Target", "Via", "Line"]} rows={(d.navigation ?? []).map((n: any) => [n.target, n.via, n.line ? `L${n.line}` : ""])} />
+          </Section>
+        </div>
+      ) : (
+        <>
+          <Section title="Screen">
+            <KV rows={[["Platform · type", `${d.platform} · ${d.type}`], ["Title", d.title], ["Routes", <Chips values={d.routes ?? []} className="border-layer-ui/40 text-ink" />], ["Rendered by", (d.rendered_by ?? []).join(", ")],
+              ["Layout / storyboard", d.layout || d.storyboard], ["View models", <Chips values={d.view_models ?? []} />], ["Components", (d.components ?? []).map((c: any) => c.name).join(", ")],
+              ["Launcher", d.launcher ? "yes (MAIN / LAUNCHER)" : ""], ["Deep links", (d.deep_links ?? []).map((x: any) => `${x.scheme}://${x.host ?? ""}${x.path ?? x.pathPrefix ?? ""}`).join(", ")]]} />
+          </Section>
+          <Section title="Fields" right={<span>{d.fields?.length ?? 0}</span>} empty={!d.fields?.length}>
+            <Table head={["Field", "Widget", "Type", "Label", "Required", "Client validation", "Server validation"]} rows={(d.fields ?? []).map((f: any) => [
+              <button type="button" className="hover:text-primary" onClick={() => f.line && line(f.line)}>{f.name}</button>, <span className="text-muted">{f.widget}{f.section ? ` · ${f.section}` : ""}</span>, f.type, f.label,
+              f.required ? <span className="text-warning">yes</span> : "", <Validations values={[...(f.validations ?? []), ...(f.validation ? [f.validation] : [])]} />,
+              f.server_validations?.length ? <div title={f.bound_to}><Validations values={f.server_validations} /></div> : "",
+            ])} />
+          </Section>
+          <Section title="Actions" empty={!d.actions?.length && !d.forms?.length}>
+            <Table head={["Label", "Widget", "Handler / submit", "Enabled when"]} rows={[
+              ...(d.actions ?? []).map((a: any) => [a.label, a.widget + (a.kind ? ` (${a.kind})` : ""), <span className="text-muted">{a.handler}</span>, a.enabled || a.disabled || ""]),
+              ...(d.forms ?? []).map((f: any) => ["form", f.method || "", f.action || f.on_submit || "(posts to the current URL)", f.object ? `binds ${f.object}` : ""]),
+            ]} />
+          </Section>
+          <Section title="Backend calls" right={<span>{d.backend_calls?.length ?? 0}</span>} empty={!d.backend_calls?.length}>
+            <Table head={["Method", "URL", "Via", "Backend endpoint"]} rows={(d.backend_calls ?? []).map((c: any) => [
+              <MethodBadge method={c.method} />, c.url, <span className="text-muted">{c.via}{c.function ? ` · ${c.function}()` : ""}{c.component ? ` · ${c.component}` : ""}</span>,
+              c.endpoint ? <span className="text-ok">{c.endpoint.replace(/^api:/, "")}</span> : <span className="text-faint">not in this repo</span>,
+            ])} />
+          </Section>
+          <Section title="Navigation" empty={!d.navigation?.length}>
+            <Table head={["Target", "Via", "Line"]} rows={(d.navigation ?? []).map((n: any) => [n.target, n.via, n.line ? `L${n.line}` : ""])} />
+          </Section>
+          <Section title="State" empty={!d.state?.length}>
+            <Chips values={(d.state ?? []).map((s: any) => (typeof s === "string" ? s : `${s.wrapper ? "@" + s.wrapper + " " : ""}${s.name}${s.from ? " ← " + s.from : ""}`))} />
+          </Section>
+          <Rules rules={d.rules} llm={d.llm_rules} onLine={line} />
+        </>
+      )}
     </>
   );
 }
@@ -518,7 +566,7 @@ export function ItemDetail({ analysisId, itemId, nav }: { analysisId: string; it
       {showTrace && <Section title="End-to-end trace" right={<span>screen → API → service → repository → table</span>}><TracePanel analysisId={analysisId} itemId={item.item_id} /></Section>}
       {item.kind === "endpoint" && <EndpointBody d={d} nav={nav} line={line} />}
       {item.kind === "table" && <TableBody item={item} d={d} nav={nav} analysisId={analysisId} />}
-      {(item.kind === "screen" || item.kind === "component") && <ScreenBody d={d} line={line} />}
+      {(item.kind === "screen" || item.kind === "component") && <ScreenBody analysisId={analysisId} item={item} d={d} line={line} />}
       {item.kind === "config" && <ConfigBody d={d} nav={nav} />}
       {item.kind === "database" && <DatabaseBody d={d} nav={nav} />}
       {!["endpoint", "table", "screen", "component", "config", "database"].includes(item.kind) && <GenericBody item={item} d={d} line={line} />}

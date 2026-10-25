@@ -80,14 +80,6 @@ export function Shell() {
             <span className="text-line-strong">|</span>
             <span className="font-mono text-micro text-faint">SHA</span>
             <ShortSha sha={info.sha} />
-            {info.merkle && (
-              <>
-                <span className="text-line-strong">|</span>
-                <span className="font-mono text-micro text-faint">MERKLE</span>
-                <span className="font-mono text-code text-ok">{info.merkle.slice(0, 6)}…{info.merkle.slice(-4)}</span>
-                <span className="chip border-ok/50 bg-ok/10 text-ok">verified</span>
-              </>
-            )}
           </div>
         ) : (
           <div className="hidden md:block" />

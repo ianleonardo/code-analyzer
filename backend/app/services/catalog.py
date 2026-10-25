@@ -614,6 +614,120 @@ def source(user: dict, analysis_id: str, path: str) -> dict:
     return {"path": row["path"], "language": row["language"], "layer": row["layer"], "role": row["role"], "loc": row["loc"], "content": content["content"] if content else None}
 
 
+def wireframe(user: dict, analysis_id: str, item_id: str, mode: str = "deterministic", regenerate: bool = False) -> dict:
+    """Returns deterministic wireframe specification (mode='deterministic') or LLM-generated HTML mockup (mode='llm')."""
+    require(user, "repositories", "read")
+    _completed(analysis_id)
+    row = db.fetchone("SELECT * FROM analysis_catalog WHERE analysis_id = ? AND item_id = ?", [analysis_id, item_id])
+    if row is None:
+        raise AppError(404, "Catalogue item not found")
+    row = dict(row)
+    details = _loads(row.get("details_json"), {})
+
+    platform = details.get("platform") or ""
+    if not platform:
+        lang = (row.get("language") or "").lower()
+        path = (row.get("path") or "").lower()
+        if "kotlin" in lang or "android" in path or path.endswith((".kt", ".xml")):
+            platform = "Android"
+        elif "swift" in lang or "ios" in path or path.endswith((".swift", ".storyboard", ".xib")):
+            platform = "iOS"
+        else:
+            platform = "Web"
+
+    if mode != "llm":
+        return {
+            "mode": "deterministic",
+            "item_id": item_id,
+            "name": row["name"],
+            "platform": platform,
+            "type": details.get("type", ""),
+            "title": details.get("title", "") or row["name"],
+            "routes": details.get("routes", []),
+            "fields": details.get("fields", []),
+            "actions": details.get("actions", []),
+            "forms": details.get("forms", []),
+            "navigation": details.get("navigation", []),
+            "components": details.get("components", []),
+            "state": details.get("state", []),
+            "layout": details.get("layout") or details.get("storyboard") or "",
+        }
+
+    # Mode: LLM
+    cached_html = details.get("wireframe_llm")
+    if cached_html and not regenerate:
+        return {"mode": "llm", "html": cached_html, "cached": True}
+
+    if not llm.configured():
+        raise AppError(400, "LLM provider is not configured. Please configure an LLM in Settings → LLM.")
+
+    # Retrieve source file content for context
+    source_content = ""
+    if row.get("path"):
+        f_row = db.fetchone("SELECT file_id FROM analysis_files WHERE analysis_id = ? AND path = ?", [analysis_id, row["path"]])
+        if f_row:
+            c_row = db.fetchone("SELECT content FROM analysis_file_contents WHERE file_id = ?", [f_row["file_id"]])
+            if c_row and c_row["content"]:
+                lines = c_row["content"].splitlines()
+                start = max(0, (row.get("line_start") or 1) - 10)
+                end = min(len(lines), (row.get("line_end") or len(lines)) + 30)
+                source_content = "\n".join(lines[start:end])[:6000]
+
+    # If layout XML is referenced (e.g. in Android), also try loading it
+    layout_name = details.get("layout")
+    layout_content = ""
+    if layout_name:
+        l_row = db.fetchone(
+            "SELECT fc.content FROM analysis_files af JOIN analysis_file_contents fc ON fc.file_id = af.file_id WHERE af.analysis_id = ? AND af.path LIKE ?",
+            [analysis_id, f"%res/layout%/{layout_name}.xml"]
+        )
+        if l_row and l_row["content"]:
+            layout_content = f"\n\nLayout XML ({layout_name}.xml):\n" + l_row["content"][:3000]
+
+    system = (
+        "You are an expert UI/UX designer and frontend engineer. "
+        "Generate a clean, modern, realistic UI wireframe in standalone HTML and CSS for the given screen.\n"
+        "Guidelines:\n"
+        "- Aesthetic: Modern wireframe / prototype style with a clean neutral palette (slate/gray) and subtle accent color for primary actions.\n"
+        "- Structure: Clean layout with top app header/navbar, proper spacing, form fields with labels & placeholders, buttons, icons (SVG or unicode), and realistic sample values.\n"
+        "- Constraints: Must be a complete, self-contained HTML document (<!DOCTYPE html><html><head><style>...</style></head><body>...</body></html>) with inline CSS so it renders standalone inside an iframe.\n"
+        "- Do NOT include markdown formatting or backticks around the HTML; return raw HTML only."
+    )
+
+    prompt = (
+        f"Screen: {row['name']}\n"
+        f"Platform: {platform} ({details.get('type', '')})\n"
+        f"Title: {details.get('title', '')}\n"
+        f"Routes: {details.get('routes', [])}\n"
+        f"Extracted Fields: {json.dumps(details.get('fields', []), default=str)}\n"
+        f"Extracted Actions: {json.dumps(details.get('actions', []), default=str)}\n"
+        f"Extracted Navigation: {json.dumps(details.get('navigation', []), default=str)}\n"
+        f"Code Excerpt:\n{source_content}{layout_content}\n\n"
+        "Generate the standalone HTML/CSS wireframe for this screen."
+    )
+
+    try:
+        raw_html = llm.complete(system, prompt, temperature=0.2)
+    except AppError:
+        raise
+    except Exception as exc:
+        raise AppError(502, f"LLM wireframe generation failed: {exc}") from exc
+
+    clean_html = raw_html.strip()
+    if clean_html.startswith("```"):
+        clean_html = re.sub(r"^```(?:html)?\s*", "", clean_html)
+        clean_html = re.sub(r"\s*```$", "", clean_html).strip()
+
+    # Cache into details_json
+    details["wireframe_llm"] = clean_html
+    db.exec_sql(
+        "UPDATE analysis_catalog SET details_json = ? WHERE analysis_id = ? AND item_id = ?",
+        [json.dumps(details), analysis_id, item_id]
+    )
+
+    return {"mode": "llm", "html": clean_html, "cached": False}
+
+
 # --- comparison -----------------------------------------------------------------------------------------------------
 
 

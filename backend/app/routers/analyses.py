@@ -125,6 +125,11 @@ def catalog_trace(analysis_id: str, item_id: str, depth: int = 5, user: dict = D
     return catalog.trace(user, analysis_id, item_id, max(1, min(depth, 8)))
 
 
+@router.get("/{analysis_id}/catalog/items/{item_id}/wireframe")
+def catalog_item_wireframe(analysis_id: str, item_id: str, mode: str = "deterministic", regenerate: bool = False, user: dict = Depends(current_user)):
+    return catalog.wireframe(user, analysis_id, item_id, mode, regenerate)
+
+
 @router.get("/{analysis_id}/catalog/source")
 def catalog_source(analysis_id: str, path: str, user: dict = Depends(current_user)):
     return catalog.source(user, analysis_id, path)

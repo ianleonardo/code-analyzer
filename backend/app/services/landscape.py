@@ -130,6 +130,7 @@ class Member:
     cores: set[str] = field(default_factory=set)
     context_paths: set[str] = field(default_factory=set)
     base_hints: list[tuple[str, str, str]] = field(default_factory=list)
+    ports: set[str] = field(default_factory=set)
     datasources: set[str] = field(default_factory=set)
     externals: list[dict] = field(default_factory=list)
     features: dict[str, list[str]] = field(default_factory=dict)
@@ -183,6 +184,12 @@ def load_member(repo: dict, pinned: str = "") -> Member | None:
             member.context_paths.add(norm_path(item["details"]["context_path"]))
     member.context_paths.discard("/")
     for key, values in member.config.items():
+        if re.search(r"(?:server\.port|\bport\b|http\.port)", key, re.I):
+            for v in values:
+                val = str(v.get("value") or "")
+                pm = re.search(r":(\d{2,5})\b", val) or re.search(r"\b(\d{2,5})\b", val)
+                if pm and 1000 <= int(pm.group(1)) <= 65535:
+                    member.ports.add(pm.group(1))
         for v in values:
             value = str(v.get("value") or "")
             if re.match(r"^https?://", value):
@@ -191,6 +198,21 @@ def load_member(repo: dict, pinned: str = "") -> Member | None:
                 ds = datasource_id(value)
                 if ds:
                     member.datasources.add(ds)
+    for c in db.fetchall("SELECT name FROM analysis_containers WHERE analysis_id = ?", [member.analysis_id]):
+        cname = c["name"]
+        cpm = re.search(r":(\d{2,5})\b", cname)
+        if cpm and 1000 <= int(cpm.group(1)) <= 65535:
+            member.ports.add(cpm.group(1))
+    for item in member.items.values():
+        if item["kind"] in ("config", "constants"):
+            sig = str(item.get("signature") or item.get("name") or "")
+            for m in re.finditer(r"https?://[^\s'\"`,]+", sig):
+                url = m.group(0).rstrip("/)")
+                member.base_hints.append((item["name"], "default", url))
+        elif item["kind"] in ("api_client", "integration", "service"):
+            b = item["details"].get("base_url") or item["details"].get("base")
+            if b and isinstance(b, str) and b.startswith("http"):
+                member.base_hints.append((item["name"], "default", b))
     analysis = db.fetchone("SELECT macro_json FROM analyses WHERE analysis_id = ?", [member.analysis_id]) or {}
     member.externals = _loads(analysis.get("macro_json"), {}).get("external_systems", []) or []
     # feature names of entry points (from the repository's feature catalogue)
@@ -265,8 +287,9 @@ def http_calls(member: Member) -> list[dict]:
             if not isinstance(h, dict) or h.get("endpoint"):
                 continue
             label = f"{item['name']}{'.' + h['_method'] if h.get('_method') else ''} → {h.get('method', '')} {h.get('url', '')}"
-            add(f"{item['item_key']}#http:{h.get('method', '')} {h.get('url', '')}", item, h.get("method", ""), h.get("url", ""), client=h.get("client", ""),
-                via=h.get("client", ""), line=h.get("line", 0), name=label)
+            add(f"{item['item_key']}#http:{h.get('method', '')} {h.get('url', '')}", item, h.get("method", ""), h.get("url", ""),
+                base=h.get("base", "") or h.get("base_url", ""), target=h.get("target", ""), client=h.get("client", ""),
+                via=h.get("client", "") or h.get("via", ""), line=h.get("line", 0), name=label)
         if item["kind"] == "screen":
             for call in d.get("backend_calls") or []:
                 if not isinstance(call, dict) or call.get("endpoint") or call.get("client"):
@@ -386,6 +409,19 @@ def _suffix(call: list[str], ep: list[str]) -> bool:
     return _seg_match(call[len(call) - len(ep):], ep)[0]
 
 
+def _prefix_stripped_match(call: list[str], ep: list[str]) -> bool:
+    """Matches when the backend endpoint has an API gateway or version prefix (e.g. /api/v1/products)
+    while the client call uses the relative resource path (e.g. /products)."""
+    if not call or len(call) >= len(ep) or len(ep) - len(call) > 3:
+        return False
+    suffix = ep[len(ep) - len(call):]
+    if not _seg_match(call, suffix)[0]:
+        return False
+    prefix = ep[: len(ep) - len(call)]
+    common_api_prefixes = {"api", "v1", "v2", "v3", "v4", "v5", "rest", "services", "public", "app", "internal", "api-v1"}
+    return any(p.lower() in common_api_prefixes or re.match(r"^v\d+$", p, re.I) for p in prefix)
+
+
 def _call_variants(call: dict, member: Member) -> list[dict]:
     """Full-URL variants of a call: [{host, segments, source, profile}] from the call's own URL, its base and the
     repository's base-URL configuration (hints)."""
@@ -416,40 +452,67 @@ def _call_variants(call: dict, member: Member) -> list[dict]:
 
 
 def _identity_evidence(call: dict, variants: list[dict], provider: Member) -> tuple[float, list[str]]:
-    """How strongly the call names the provider: Feign name, host of the URL, base-URL hints, client / key names.
+    """How strongly the call names the provider: Feign name, host of the URL, base-URL hints, client / key names, port matching.
     Independent kinds of evidence add up (at most 0.7)."""
     evidence: list[str] = []
     score = 0.0
     hosts = {v["host"] for v in variants if v["host"] and not v["source"].startswith("hint:")}
     hint_hosts = {v["host"] for v in variants if v["host"] and v["source"].startswith("hint:")}
+
+    # Port matching: check if caller's URL host or base has a port that matches provider's listening ports
+    call_ports = set()
+    for v in variants:
+        if v.get("host"):
+            pm = re.search(r":(\d{2,5})$", v["host"])
+            if pm:
+                call_ports.add(pm.group(1))
+    if call.get("base"):
+        bpm = re.search(r":(\d{2,5})(?:/|$)", call["base"])
+        if bpm:
+            call_ports.add(bpm.group(1))
+    matched_ports = call_ports & provider.ports
+    if matched_ports:
+        score += 0.35
+        evidence.append(f"port {', '.join(sorted(matched_ports))} matches configured server port of {provider.name}")
+
     target = ident(call.get("target", ""))
     if target and target in provider.identity:
         score += 0.35
-        evidence.append(f"Feign client name '{call['target']}' is an application / artifact name of {provider.name}")
+        evidence.append(f"client / target name '{call['target']}' is an application / artifact name of {provider.name}")
+    elif tokens(call.get("target", "")) & provider.cores:
+        score += 0.30
+        evidence.append(f"call target '{call['target']}' matches {provider.name}")
+
     host_score = 0.0
     for host in hosts:
-        labels = {ident(part) for part in re.split(r"[.]", host)}
+        clean_host = host.split(":")[0]
+        labels = {ident(part) for part in re.split(r"[.]", clean_host)}
         if labels & provider.identity:
             host_score = max(host_score, 0.3)
             evidence.append(f"host {host} names {provider.name}")
-        elif tokens(host) & provider.cores:
+        elif tokens(clean_host) & provider.cores:
             host_score = max(host_score, 0.15)
-            evidence.append(f"host {host} shares the name '{', '.join(sorted(tokens(host) & provider.cores))}' with {provider.name}")
+            evidence.append(f"host {host} shares the name '{', '.join(sorted(tokens(clean_host) & provider.cores))}' with {provider.name}")
     score += host_score
     if not host_score:
         for host in hint_hosts:
-            if {ident(part) for part in host.split(".")} & provider.identity or tokens(host) & provider.cores:
+            clean_host = host.split(":")[0]
+            if {ident(part) for part in clean_host.split(".")} & provider.identity or tokens(clean_host) & provider.cores:
                 score += 0.1
                 evidence.append(f"repository base URL host {host} resembles {provider.name}")
                 break
+
+    # Target / service name clues from client, source_name, via, and config keys
     key_names = re.findall(r"\$\{([^}:]+)", call.get("base", "") + call.get("url", ""))
     words = set()
     for key in key_names:
         words |= tokens(key.replace("base-url", "").replace("url", ""))
-    words |= tokens(call.get("client", ""))
+    stop = {"client", "service", "api", "controller", "impl", "util", "helper", "base", "url", "http", "rest", "config", "fetch", "get", "post", "delete", "patch", "put", "shared", "app"}
+    caller_text = f"{call.get('client', '')} {call.get('source_name', '')} {call.get('via', '')} {call.get('base', '')}"
+    words |= {w for w in tokens(caller_text) if len(w) > 2 and w not in stop}
     common = words & provider.cores
-    if common and score < 0.15:
-        score += 0.12
+    if common and score < 0.25:
+        score += 0.20
         evidence.append(f"client / configuration name shares '{', '.join(sorted(common))}' with {provider.name}")
     return min(score, 0.7), evidence
 
@@ -476,6 +539,8 @@ def match_http(call: dict, caller: Member, providers: list[Member]) -> list[dict
                         structural, why, exact = 0.5, f"path matches {ep['item']['name']}", exact2
                     elif _suffix(v["segments"], ep["full_segments"]) or _suffix(v["segments"], ep["segments"]):
                         structural, why, exact = 0.35, f"path ends with {ep['item']['name']} (prefix {'/'.join(v['segments'][: len(v['segments']) - len(ep['segments'])])} looks like a gateway / base path)", False
+                    elif _prefix_stripped_match(v["segments"], ep["segments"]) or _prefix_stripped_match(v["segments"], ep["full_segments"]):
+                        structural, why, exact = 0.45, f"path matches {ep['item']['name']} (under backend API prefix)", True
                 if not structural:
                     continue
                 if not exact:
@@ -1201,10 +1266,10 @@ def entry_points(user: dict, landscape_id: str) -> list[dict]:
         if not analysis_id:
             continue
         for item in db.fetchall(
-            "SELECT item_key, kind, name, path FROM analysis_catalog WHERE analysis_id = ? AND kind IN ('screen', 'endpoint', 'job', 'listener') ORDER BY kind, name",
+            "SELECT item_id, item_key, kind, name, path FROM analysis_catalog WHERE analysis_id = ? AND kind IN ('screen', 'endpoint', 'job', 'listener') ORDER BY kind, name",
             [analysis_id],
         ):
-            out.append({**item, "repo_id": repo["repo_id"], "repo_name": repo["name"]})
+            out.append({**item, "analysis_id": analysis_id, "repo_id": repo["repo_id"], "repo_name": repo["name"]})
     return out
 
 
@@ -1227,7 +1292,7 @@ def journey(user: dict, landscape_id: str, repo_id: str, key: str, depth: int = 
 
     def graph_of(rid: str, analysis_id: str) -> tuple[dict, dict]:
         if rid not in graphs:
-            items = {r["item_key"]: r for r in db.fetchall("SELECT item_key, kind, name, path, line_start, details_json FROM analysis_catalog WHERE analysis_id = ?", [analysis_id])}
+            items = {r["item_key"]: r for r in db.fetchall("SELECT item_id, item_key, kind, name, path, line_start, details_json FROM analysis_catalog WHERE analysis_id = ?", [analysis_id])}
             out: dict[str, list[dict]] = {}
             for link in db.fetchall("SELECT source_key, target_key, kind FROM analysis_catalog_links WHERE analysis_id = ?", [analysis_id]):
                 out.setdefault(link["source_key"], []).append(link)
@@ -1300,7 +1365,7 @@ def journey(user: dict, landscape_id: str, repo_id: str, key: str, depth: int = 
     walk(repo_id, start_analysis, key, 0)
     start_item = items[key]
     title = f"{start_item['name']} ({names.get(repo_id)})"
-    return {"title": title, "start": {"repo_id": repo_id, "key": key, "name": start_item["name"], "kind": start_item["kind"]}, "steps": steps,
+    return {"title": title, "start": {"repo_id": repo_id, "key": key, "name": start_item["name"], "kind": start_item["kind"], "item_id": start_item.get("item_id"), "path": start_item.get("path"), "analysis_id": start_analysis}, "steps": steps,
             "participants": participants, "mermaid": _journey_mermaid(participants, steps, start_item["name"])}
 
 

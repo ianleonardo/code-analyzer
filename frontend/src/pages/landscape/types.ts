@@ -36,9 +36,9 @@ export type ProvidedInterface = {
 };
 export type ExternalSystem = { name: string; type: string; users: { repo_id: string; repo_name: string; name: string; kind: string; direction: string }[] };
 
-export type EntryPoint = { repo_id: string; repo_name: string; item_key: string; kind: string; name: string; path: string };
+export type EntryPoint = { repo_id: string; repo_name: string; item_key: string; kind: string; name: string; path: string; item_id?: string; analysis_id?: string };
 export type JourneyStep = { from: string; to: string; kind: string; label: string; via: string; status: string; target: string; group_key: string };
-export type Journey = { title: string; start: { repo_id: string; key: string; name: string; kind: string }; steps: JourneyStep[]; participants: string[]; mermaid: string };
+export type Journey = { title: string; start: { repo_id: string; key: string; name: string; kind: string; item_id?: string; analysis_id?: string; path?: string }; steps: JourneyStep[]; participants: string[]; mermaid: string };
 
 export const KIND_META: Record<LinkKind, { label: string; icon: string; color: string }> = {
   http: { label: "HTTP / REST", icon: "http", color: "text-layer-api border-layer-api/50" },

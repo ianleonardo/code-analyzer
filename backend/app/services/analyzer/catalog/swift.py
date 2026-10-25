@@ -234,10 +234,36 @@ def _networking(ctx: Context, cat: Catalog, ref: TypeRef) -> None:
         cat.type_keys.setdefault(decl.name.split(".")[0], item.key)
 
 
+def _swift_url_configs(ctx: Context) -> tuple[str, dict[str, str]]:
+    prefix = ""
+    base_urls = {}
+    for f in ctx.code_files("Swift"):
+        t = f.text
+        pm = re.search(r'(?:apiPrefix|prefix|basePath)\s*=\s*"([^"]+)"', t)
+        if pm and not prefix:
+            prefix = pm.group(1)
+        for m in re.finditer(r'(?:var|let)\s+(\w+?)(?:BaseURL|Url|URL)\b[^=]*=\s*[^"\n]*"(https?://[^"]+)"', t):
+            base_urls[m.group(1).lower()] = m.group(2)
+        for m in re.finditer(r'(?:var|let)\s+(\w+?)(?:BaseURL|Url|URL)\b[^"\n]*URL\s*\(\s*string:\s*"([^"]+)"', t):
+            base_urls[m.group(1).lower()] = m.group(2)
+        for m in re.finditer(r'url\s*\(\s*forKey\s*:\s*"(\w+)"\s*,\s*env\s*:\s*"(\w+)"\s*,\s*fallback\s*:\s*"(https?://[^"]+)"\)', t):
+            key = m.group(1).lower().replace("baseurl", "").replace("url", "")
+            env = m.group(2).lower().replace("_base_url", "").replace("_url", "")
+            fallback = m.group(3)
+            base_urls[key] = fallback
+            base_urls[env] = fallback
+        for m in re.finditer(r'case\s+(\w+)\s*=\s*"(https?://[^"]+)"', t):
+            base_urls[m.group(1).lower()] = m.group(2)
+        for m in re.finditer(r'(?:baseURL|baseUrl)\s*=\s*"(https?://[^"]+)"', t):
+            base_urls.setdefault("default", m.group(1))
+    return prefix, base_urls
+
+
 def extract(ctx: Context, cat: Catalog) -> None:
     swift_files = ctx.code_files("Swift")
     if not swift_files and not any(".xcdatamodel" in f.path or f.path.endswith(".storyboard") for f in ctx.files):
         return
+    cat.extra["swift_url_config"] = _swift_url_configs(ctx)
     _core_data(ctx, cat)
     boards = _storyboards(ctx)
     for file in swift_files:
@@ -382,6 +408,126 @@ def _methods_summary(ref: TypeRef, var_types: dict[str, str]) -> tuple[list[dict
     return methods, all_calls
 
 
+def _extract_swift_http_calls(decl, member, file, cat: Catalog) -> list[dict]:
+    body = member.body or ""
+    if not body:
+        return []
+    prefix, base_urls = cat.extra.get("swift_url_config", ("", {}))
+
+    verb = ""
+    vm = re.search(r"\b(?:client|api|session|http)\s*\.\s*(get|post|postEmpty|put|patch|delete|request)\b", body)
+    if vm:
+        verb = "POST" if vm.group(1) == "postEmpty" else vm.group(1).upper()
+    if not verb:
+        vm2 = re.search(r"\bmethod:\s*\.(get|post|put|patch|delete)\b", body)
+        if vm2:
+            verb = vm2.group(1).upper()
+    if not verb:
+        vm3 = re.search(r"\.httpMethod\s*=\s*[\"'](GET|POST|PUT|PATCH|DELETE)[\"']", body, re.I)
+        if vm3:
+            verb = vm3.group(1).upper()
+    if not verb:
+        name_lower = member.name.lower()
+        if re.match(r"^(?:fetch|get|list|find|load|read|show)\b", name_lower):
+            verb = "GET"
+        elif re.match(r"^(?:create|add|insert|save|post|submit|checkout)\b", name_lower):
+            verb = "POST"
+        elif re.match(r"^(?:update|edit|modify|patch)\b", name_lower):
+            verb = "PATCH"
+        elif re.match(r"^(?:put|replace)\b", name_lower):
+            verb = "PUT"
+        elif re.match(r"^(?:delete|remove|clear)\b", name_lower):
+            verb = "DELETE"
+        else:
+            verb = "GET"
+
+    found_calls = []
+    for m in re.finditer(r'(?:(\w+)\.)?(\w+?)(?:URL|Url)\s*\(\s*"([^"]+)"\s*\)', body):
+        helper_token = m.group(2).lower()
+        raw_path = m.group(3)
+        found_calls.append((helper_token, raw_path, m.start()))
+
+    if not found_calls:
+        for m in re.finditer(r'URL\s*\(\s*string:\s*"([^"]+)"\s*\)', body):
+            found_calls.append(("", m.group(1), m.start()))
+        for m in re.finditer(r'\b(?:client|api)\s*\.\s*(?:get|post|put|patch|delete|postEmpty)\s*\(\s*"([^"]+)"', body):
+            found_calls.append(("", m.group(1), m.start()))
+
+    if not found_calls and ("client." in body or "url" in body or "URLSession" in body):
+        for m in re.finditer(r'"(/[\w\-/{}\\()]+)"', body):
+            found_calls.append(("", m.group(1), m.start()))
+
+    out = []
+    seen = set()
+    for helper_token, raw_path, pos in found_calls:
+        norm = re.sub(r"\\\((\w+)\)", r"{\1}", raw_path)
+        target = helper_token
+        if not target:
+            target = re.sub(r"(Service|Manager|Repository|Client|API|Api|Store|UseCase|Interactor)$", "", decl.name).lower()
+        base_url = base_urls.get(target, "")
+        if not base_url:
+            for k, u in base_urls.items():
+                if k in target or k in decl.name.lower():
+                    base_url = u
+                    target = k
+                    break
+        full_path = norm
+        if prefix and not norm.startswith(prefix) and not norm.startswith("http"):
+            full_path = f"{prefix.rstrip('/')}/{norm.lstrip('/')}"
+        sig = (verb, full_path)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        call_line = member.body_line + body.count("\n", 0, pos) if member.body_line else member.line
+        out.append({
+            "method": verb,
+            "url": full_path,
+            "raw_path": norm,
+            "base": base_url,
+            "target": target,
+            "client": "APIClient",
+            "line": call_line,
+        })
+    return out
+
+
+def _attach_swift_http_calls(ctx: Context, cat: Catalog, ref: TypeRef, item: Item, methods: list[dict]) -> None:
+    decl, file = ref.decl, ref.file
+    method_by_name = {m["name"]: m for m in methods}
+    all_http_calls = []
+    for member in decl.methods():
+        if member.kind == "constructor":
+            continue
+        m_calls = _extract_swift_http_calls(decl, member, file, cat)
+        if not m_calls:
+            continue
+        if member.name in method_by_name:
+            method_by_name[member.name]["http_calls"] = m_calls
+        all_http_calls.extend(m_calls)
+        for call in m_calls:
+            client_key = f"client:{call['method']} {call['url']}"
+            if client_key not in cat.items:
+                cat.add(Item(
+                    "ui", "api_client", client_key, f"{call['method']} {call['url']}",
+                    file.path, call["line"], call["line"], "Swift", "APIClient",
+                    f"{decl.name}.{member.name}",
+                    {
+                        "client": decl.name,
+                        "method": call["method"],
+                        "path": call["url"],
+                        "raw_path": call["raw_path"],
+                        "base_url": call["base"],
+                        "target": call["target"],
+                        "operation": member.name,
+                        "params": [],
+                    },
+                    code=snippet(file.text, member.line, member.end_line or (member.line + 10), 20),
+                ))
+            cat.link(item.key, client_key, "calls", member.name)
+    if all_http_calls:
+        item.details["http_calls"] = all_http_calls
+
+
 def _view_model(ctx: Context, cat: Catalog, ref: TypeRef) -> None:
     decl, file = ref.decl, ref.file
     var_types = _var_types(ref)
@@ -396,6 +542,7 @@ def _view_model(ctx: Context, cat: Catalog, ref: TypeRef) -> None:
     cat.pending_calls += [(item.key, c["type"], c["method"], c["line"]) for c in calls]
     for t in item.details["dependencies"]:
         cat.pending_types.append((item.key, t, "uses"))
+    _attach_swift_http_calls(ctx, cat, ref, item, methods)
 
 
 def _swift_service(ctx: Context, cat: Catalog, ref: TypeRef) -> None:
@@ -418,3 +565,4 @@ def _swift_service(ctx: Context, cat: Catalog, ref: TypeRef) -> None:
     cat.pending_calls += [(item.key, c["type"], c["method"], c["line"]) for c in calls]
     for t in item.details["dependencies"]:
         cat.pending_types.append((item.key, t, "uses"))
+    _attach_swift_http_calls(ctx, cat, ref, item, methods)

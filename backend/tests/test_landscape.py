@@ -237,3 +237,85 @@ def test_external_messaging_broker_capture(client, admin, tmp_path):
     for edge in msg_edges:
         assert len(edge["links"]) >= 1
         assert edge["links"][0]["source_name"] or edge["links"][0]["target_name"]
+
+
+def test_cross_service_base_url_and_prefix_matching():
+    from app.services.landscape import Member, match_http
+    caller = Member(repo={"repo_id": "caller-repo", "name": "cart-ios"}, analysis_id="a1", items={})
+    caller.cores = {"cart", "ios"}
+
+    provider = Member(
+        repo={"repo_id": "provider-repo", "name": "cart-inventory"}, analysis_id="a2",
+        items={
+            "ep:products": {
+                "item_key": "ep:products",
+                "kind": "endpoint",
+                "name": "GET /api/v1/products",
+                "details": {"method": "GET", "path": "/api/v1/products"},
+            },
+            "ep:product_by_id": {
+                "item_key": "ep:product_by_id",
+                "kind": "endpoint",
+                "name": "GET /api/v1/products/{id}",
+                "details": {"method": "GET", "path": "/api/v1/products/{id}"},
+            },
+        },
+    )
+    provider.cores = {"cart", "inventory"}
+    provider.ports = {"8081"}
+
+    # 1. Exact path + port match + target clue
+    call1 = {
+        "method": "GET",
+        "url": "/api/v1/products",
+        "base": "http://localhost:8081",
+        "target": "inventory",
+        "client": "APIClient",
+    }
+    matches1 = match_http(call1, caller, [provider])
+    assert len(matches1) == 1
+    assert matches1[0]["provider"].name == "cart-inventory"
+    assert matches1[0]["endpoint"]["name"] == "GET /api/v1/products"
+    assert matches1[0]["score"] >= 0.8
+    assert any("port 8081" in e for e in matches1[0]["evidence"])
+    assert any("inventory" in e for e in matches1[0]["evidence"])
+
+    # 2. Relative path (/products) matching backend with prefix (/api/v1/products)
+    call2 = {
+        "method": "GET",
+        "url": "/products",
+        "base": "http://localhost:8081",
+        "target": "inventory",
+        "client": "APIClient",
+    }
+    matches2 = match_http(call2, caller, [provider])
+    assert len(matches2) == 1
+    assert matches2[0]["endpoint"]["name"] == "GET /api/v1/products"
+    assert any("under backend API prefix" in e for e in matches2[0]["evidence"])
+
+    # 3. Path with prefix matching backend with relative root
+    provider_root = Member(
+        repo={"repo_id": "root-repo", "name": "cart-order"}, analysis_id="a3",
+        items={
+            "ep:carts": {
+                "item_key": "ep:carts",
+                "kind": "endpoint",
+                "name": "POST /carts",
+                "details": {"method": "POST", "path": "/carts"},
+            },
+        },
+    )
+    provider_root.cores = {"cart", "order"}
+    provider_root.ports = {"8083"}
+
+    call3 = {
+        "method": "POST",
+        "url": "/api/v1/carts",
+        "base": "http://localhost:8083",
+        "target": "order",
+        "client": "APIClient",
+    }
+    matches3 = match_http(call3, caller, [provider_root])
+    assert len(matches3) == 1
+    assert matches3[0]["endpoint"]["name"] == "POST /carts"
+

@@ -81,6 +81,7 @@ _CALL_PATTERNS = [
     re.compile(r"\burl\s*:\s*(`[^`]*`|'[^']*'|\"[^\"]*\")\s*,\s*method\s*:\s*['\"](\w+)['\"]"),
     re.compile(r"\buse(?:SWR|SWRImmutable|SWRInfinite)\s*\(\s*(`[^`]*`|'[^']*'|\"[^\"]*\")"),
     re.compile(r"\.\s*(get|post|put|delete|patch)\s*(?:<[^()]*?>)?\s*\(\s*\{"),
+    re.compile(r"\b(\w*fetch\w*|apiCall|callApi|apiRequest|sendRequest|httpFetch|apiClient)\s*(?:<[^>]*>)?\s*\(\s*([\w.$]+)\s*,\s*(`[^`]*`|'[^']*'|\"[^\"]*\")(?:\s*,\s*(\{[\s\S]*?\}))?\s*\)", re.I),
 ]
 _RECEIVERS_SKIP = {"map", "set", "params", "searchParams", "headers", "formData", "cache", "localStorage", "sessionStorage", "router", "Object", "Reflect", "this", "props",
                    "state", "store", "cookies", "query", "form", "data", "result", "response", "res", "req", "app", "express", "Router", "weakMap", "url", "URLSearchParams"}
@@ -132,13 +133,21 @@ def http_calls_in(text: str, base_line: int = 1) -> list[dict]:
                 url, method, via = _url_text(m.group(1)), m.group(2).upper(), "request config"
             elif index == 5:
                 url, method, via = _url_text(m.group(1)), "GET", "useSWR"
-            else:
+            elif index == 6:
                 obj_start = m.end() - 1
                 obj = clean[obj_start : match_close(clean, obj_start) + 1]
                 um = re.search(r"\burl\s*:\s*(`[^`]*`|'[^']*'|\"[^\"]*\")", obj)
                 if not um:
                     continue
                 url, method, via = _url_text(um.group(1)), m.group(1).upper(), "generated client"
+            else:
+                base_expr = m.group(2)
+                path = _url_text(m.group(3))
+                url = "${" + base_expr + "}" + (path if path.startswith("/") else "/" + path)
+                options = m.group(4) or ""
+                mm = re.search(r"method\s*:\s*['\"`](\w+)", options)
+                method = mm.group(1).upper() if mm else "GET"
+                via = m.group(1)
             if not re.search(r"^(?:\$\{[^}]*\})?/|^https?://|^\$\{[^}]*\}/|/api\b", url) or re.match(r"^\./|^\.\./", url) or len(url) > 300:
                 continue
             if re.search(r"\.(png|jpe?g|svg|gif|css|ico|woff2?|json|html?)(\?|$)", url) and "/api" not in url:
