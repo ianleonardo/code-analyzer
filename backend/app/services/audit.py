@@ -121,11 +121,20 @@ def actions(user: dict) -> list[str]:
     return [row["action"] for row in db.fetchall("SELECT DISTINCT action FROM audit_log ORDER BY action")]
 
 
-def purge(user: dict, date_from: str, date_to: str) -> dict:
+def purge(user: dict, date_from: str, date_to: str, dry_run: bool = False) -> dict:
     require(user, "settings", "write")
     start, end = _parse_date(date_from), _parse_date(date_to, end=True)
-    if not start or not end:
+    if not start and not end:
         raise AppError(400, "Choose a date range to delete")
-    count = int(db.scalar("SELECT count(*) AS c FROM audit_log WHERE ts >= ? AND ts < ?", [start, end]) or 0)
-    db.exec_sql("DELETE FROM audit_log WHERE ts >= ? AND ts < ?", [start, end])
-    return {"deleted": count}
+    where, params = ["1=1"], []
+    if start:
+        where.append("ts >= ?")
+        params.append(start)
+    if end:
+        where.append("ts < ?")
+        params.append(end)
+    clause = " AND ".join(where)
+    count = int(db.scalar(f"SELECT count(*) AS c FROM audit_log WHERE {clause}", params) or 0)
+    if not dry_run and count > 0:
+        db.exec_sql(f"DELETE FROM audit_log WHERE {clause}", params)
+    return {"matched": count, "deleted": 0 if dry_run else count, "skipped_active": 0, "dry_run": dry_run}

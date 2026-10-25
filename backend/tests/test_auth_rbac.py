@@ -42,3 +42,30 @@ def test_change_own_password(client):
     analyst = login(client, "analyst", "AnalystPass123!")
     assert client.post("/api/auth/password", json={"current_password": "AnalystPass123!", "new_password": "NewPass12345"}, headers=analyst).status_code == 200
     login(client, "analyst", "NewPass12345")
+
+
+def test_audit_purge_dry_run_and_delete(client, admin):
+    # Generate some audit entries
+    client.post("/api/auth/login", json={"login_id": "admin", "password": "wrongpassword"})
+    entries = client.get("/api/audit", headers=admin).json()["items"]
+    assert len(entries) >= 1
+
+    # Viewer cannot purge audit
+    viewer = login(client, "viewer", "ViewerPass123!")
+    assert client.post("/api/audit/purge", json={"date_from": "2020-01-01", "date_to": "2030-01-01"}, headers=viewer).status_code == 403
+
+    # Dry run preview
+    preview = client.post("/api/audit/purge", json={"date_from": "2020-01-01", "date_to": "2030-01-01", "dry_run": True}, headers=admin).json()
+    assert preview["dry_run"] is True
+    assert preview["matched"] >= 1
+    assert preview["deleted"] == 0
+
+    # Actual purge
+    purged = client.post("/api/audit/purge", json={"date_from": "2020-01-01", "date_to": "2030-01-01", "dry_run": False}, headers=admin).json()
+    assert purged["dry_run"] is False
+    assert purged["deleted"] >= 1
+
+    # The purge action itself is audited, but prior logs are deleted
+    after = client.get("/api/audit?date_from=2020-01-01&date_to=2030-01-01", headers=admin).json()["items"]
+    assert not any(e["action"] == "login_failed" for e in after)
+    assert all(e["action"] == "purge_audit" for e in after)

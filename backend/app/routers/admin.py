@@ -94,7 +94,12 @@ def audit_actions(user: dict = Depends(current_user)):
 
 @router.post("/audit/purge")
 def purge_audit(body: dict, user: dict = Depends(current_user)):
-    return audit.purge(user, str(body.get("date_from") or ""), str(body.get("date_to") or ""))
+    return audit.purge(
+        user,
+        str(body.get("date_from") or ""),
+        str(body.get("date_to") or ""),
+        bool(body.get("dry_run", False)),
+    )
 
 
 @router.get("/database")

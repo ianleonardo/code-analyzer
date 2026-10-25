@@ -72,11 +72,12 @@ export function Shell() {
           </span>
         </Link>
         {info ? (
-          <div className="hidden min-w-0 items-center gap-2 border border-line bg-inset px-2 py-1 md:flex">
-            <span className={`h-1.5 w-1.5 rounded-full ${info.status === "completed" ? "bg-ok" : info.status === "running" ? "bg-primary pulse-dot" : "bg-warning"}`} />
-            <span className="max-w-[220px] truncate font-mono text-code">{info.repoName}</span>
+          <div className="hidden min-w-0 max-w-3xl lg:max-w-4xl items-center gap-2.5 border border-line bg-inset px-3.5 py-1.5 md:flex">
+            <span className={`h-2 w-2 shrink-0 rounded-full ${info.status === "completed" ? "bg-ok" : info.status === "running" ? "bg-primary pulse-dot" : "bg-warning"}`} />
+            {info.source && <SourceBadge source={info.source} />}
+            <span className="max-w-[400px] lg:max-w-[500px] truncate font-mono text-code font-medium" title={info.repoName}>{info.repoName}</span>
             <span className="font-mono text-code text-faint">::</span>
-            <span className="font-mono text-code text-primary">{info.branch || "—"}</span>
+            <span className="max-w-[360px] lg:max-w-[500px] truncate font-mono text-code text-primary font-medium" title={info.branch || "—"}>{info.branch || "—"}</span>
             <span className="text-line-strong">|</span>
             <span className="font-mono text-micro text-faint">SHA</span>
             <ShortSha sha={info.sha} />
@@ -84,7 +85,7 @@ export function Shell() {
         ) : (
           <div className="hidden md:block" />
         )}
-        <button type="button" className="ml-auto flex h-8 w-72 max-w-[30vw] items-center gap-2 border border-line bg-inset px-2 text-left font-mono text-code text-faint hover:border-primary" onClick={() => setSearch(true)}>
+        <button type="button" className="ml-auto flex h-8 w-64 max-w-[25vw] items-center gap-2 border border-line bg-inset px-2.5 text-left font-mono text-code text-faint hover:border-primary" onClick={() => setSearch(true)}>
           <span className="material-symbols-outlined icon-sm">search</span>
           <span className="flex-1 truncate">{info ? "sym:Auth* · path · smell" : "Search repositories"}</span>
           <span className="chip border-line text-faint">Ctrl+K</span>
