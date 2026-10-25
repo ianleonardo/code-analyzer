@@ -25,6 +25,8 @@ function Badge({ row }: { row: CatalogRow }) {
   if (row.kind === "screen") return <span className="font-mono text-micro text-faint">{b.fields} fields · {b.calls} calls</span>;
   if (row.kind === "query") return <span className="font-mono text-micro text-faint">{b.operation} {b.dialect}</span>;
   if (row.kind === "job") return <span className="truncate font-mono text-micro text-faint">{b.schedule}</span>;
+  if (row.kind === "listener") return <span className="truncate font-mono text-micro text-faint">{b.transport}{b.destination ? ` · ${b.destination}` : ""}</span>;
+  if (row.kind === "topic") return <span className="chip border-line-strong text-muted">{b.transport || "event"}</span>;
   if (row.kind === "config") return <span className="font-mono text-micro text-faint">{b.secret ? "secret · " : ""}{b.used ? `${b.used} uses` : b.category}</span>;
   if (["service", "view_model", "repository"].includes(row.kind)) return <span className="font-mono text-micro text-faint">{b.methods} methods</span>;
   if (["api_client", "integration"].includes(row.kind)) return b.matched ? <span className="material-symbols-outlined icon-sm text-ok" title="Matched to a backend endpoint">link</span> : null;

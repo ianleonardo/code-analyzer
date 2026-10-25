@@ -264,6 +264,11 @@ def _badge(row: dict, details: dict) -> dict:
         return {"operation": details.get("operation", ""), "dialect": details.get("dialect", "")}
     if kind == "job":
         return {"schedule": details.get("human", "")}
+    if kind == "listener":
+        dest = details.get("destinations", [])
+        return {"transport": details.get("transport", ""), "destination": dest[0] if dest else ""}
+    if kind == "topic":
+        return {"transport": details.get("transport", "")}
     if kind == "config":
         return {"secret": details.get("secret", False), "category": details.get("category", ""), "used": len(details.get("used_by", []))}
     if kind in ("api_client", "integration"):
