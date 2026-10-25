@@ -15,9 +15,15 @@ export function ScreenWireframe({ analysisId, itemId, itemName, itemPath, d, onL
   // Mode: "deterministic" (Option A - default) vs "llm" (Option B - AI layout)
   const [wireframeMode, setWireframeMode] = useState<"deterministic" | "llm">("deterministic");
 
-  // Device view: "mobile" vs "web" (inferred from platform, user can toggle)
-  const isWebPlatform = d.platform === "Web" || (!d.platform && (itemPath.endsWith(".tsx") || itemPath.endsWith(".jsx") || itemPath.endsWith(".html")));
-  const [deviceType, setDeviceType] = useState<"mobile" | "web">(isWebPlatform ? "web" : "mobile");
+  // Platform detection: native mobile (iOS / Android) vs web
+  const isIos = d.platform === "iOS" || itemPath.endsWith(".swift");
+  const isAndroid = d.platform === "Android" || itemPath.endsWith(".kt") || (itemPath.endsWith(".java") && itemPath.includes("android"));
+  const isNativeMobile = isIos || isAndroid || d.platform === "Mobile";
+  const isWebPlatform = !isNativeMobile && (d.platform === "Web" || (!d.platform && (itemPath.endsWith(".tsx") || itemPath.endsWith(".jsx") || itemPath.endsWith(".html"))));
+  const platformName = isIos ? "iOS" : isAndroid ? "Android" : d.platform || (isWebPlatform ? "Web" : "Mobile");
+
+  // Device view: native mobile stays "mobile"; web defaults to "web" with responsive toggle
+  const [deviceType, setDeviceType] = useState<"mobile" | "web">(isNativeMobile ? "mobile" : "web");
 
   // LLM state
   const [llmData, setLlmData] = useState<{ html: string; cached: boolean } | null>(
@@ -83,29 +89,39 @@ export function ScreenWireframe({ analysisId, itemId, itemName, itemPath, d, onL
             </button>
           </div>
 
-          {/* Device chassis toggle */}
-          <div className="flex rounded-lg border border-line bg-surface p-0.5">
-            <button
-              type="button"
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-micro transition-colors ${
-                deviceType === "mobile" ? "bg-elevated text-ink font-semibold" : "text-muted hover:text-ink"
-              }`}
-              onClick={() => setDeviceType("mobile")}
-            >
-              <span className="material-symbols-outlined icon-sm">smartphone</span>
-              Mobile {d.platform ? `(${d.platform})` : ""}
-            </button>
-            <button
-              type="button"
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-micro transition-colors ${
-                deviceType === "web" ? "bg-elevated text-ink font-semibold" : "text-muted hover:text-ink"
-              }`}
-              onClick={() => setDeviceType("web")}
-            >
-              <span className="material-symbols-outlined icon-sm">laptop_mac</span>
-              Web Browser
-            </button>
-          </div>
+          {/* Device chassis: For native mobile (Android/iOS), show native platform badge without browser option.
+              For web apps, provide Desktop Browser vs Mobile Responsive preview toggle. */}
+          {isNativeMobile ? (
+            <div className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-1 text-micro font-medium text-slate-300">
+              <span className={`material-symbols-outlined icon-sm ${isIos ? "text-sky-400" : "text-emerald-400"}`}>
+                {isIos ? "phone_iphone" : "smartphone"}
+              </span>
+              <span>{isIos ? "iOS (iPhone)" : isAndroid ? "Android Device" : "Mobile Device"}</span>
+            </div>
+          ) : (
+            <div className="flex rounded-lg border border-line bg-surface p-0.5">
+              <button
+                type="button"
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-micro transition-colors ${
+                  deviceType === "web" ? "bg-elevated text-ink font-semibold" : "text-muted hover:text-ink"
+                }`}
+                onClick={() => setDeviceType("web")}
+              >
+                <span className="material-symbols-outlined icon-sm">laptop_mac</span>
+                Desktop Browser
+              </button>
+              <button
+                type="button"
+                className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-micro transition-colors ${
+                  deviceType === "mobile" ? "bg-elevated text-ink font-semibold" : "text-muted hover:text-ink"
+                }`}
+                onClick={() => setDeviceType("mobile")}
+              >
+                <span className="material-symbols-outlined icon-sm">smartphone</span>
+                Mobile View
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right side controls */}
@@ -175,7 +191,7 @@ export function ScreenWireframe({ analysisId, itemId, itemName, itemPath, d, onL
           /* Option A: Deterministic Device Wireframe */
           deviceType === "mobile" ? (
             <MobilePhoneFrame
-              platform={d.platform || "Mobile"}
+              platform={platformName}
               title={title}
               fields={fields}
               actions={actions}
