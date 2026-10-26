@@ -11,20 +11,22 @@ import { C4Tab } from "./analysis/C4Tab";
 import { DependenciesTab } from "./analysis/DependenciesTab";
 import { InspectorTab } from "./analysis/InspectorTab";
 import { LayersTab } from "./analysis/LayersTab";
+import { OpenApiTab } from "./analysis/OpenApiTab";
 import { OverviewTab } from "./analysis/OverviewTab";
 import { QualityTab } from "./analysis/QualityTab";
 import { TopologyTab } from "./analysis/TopologyTab";
 
 export type C4Level = "context" | "container" | "component" | "dynamic";
 const TABS = [
+  { key: "chat", icon: "forum", label: "Chat with Analyst" },
   { key: "overview", icon: "dashboard", label: "Overview" },
   { key: "c4", icon: "account_tree", label: "C4 Architecture" },
   { key: "layers", icon: "layers", label: "Layer Catalogue" },
+  { key: "openapi", icon: "api", label: "API Spec" },
   { key: "topology", icon: "folder_open", label: "Directory & Layer Topology" },
   { key: "inspector", icon: "hub", label: "Dual-Pane Graph & Code" },
   { key: "quality", icon: "report", label: "Quality & Smells" },
   { key: "dependencies", icon: "inventory_2", label: "Dependencies" },
-  { key: "chat", icon: "forum", label: "Chat with Analyst" },
 ] as const;
 const STAGES = ["Ingestion", "Macro discovery", "Micro parsing", "Code graph", "Classification", "Synthesis", "Layer catalogue", "Indexing", "Saving results"];
 /** Position of a stage name in STAGES; also understands the older labels ("Stage 3 · Code graph", "Persisting"). */
@@ -121,6 +123,13 @@ export function AnalysisPage() {
 
   useEffect(() => {
     if (!analysis) return;
+    if (analysis.repo?.repo_id) {
+      try {
+        localStorage.setItem("ca_open_repo_id", analysis.repo.repo_id);
+      } catch {
+        // ignore
+      }
+    }
     setInfo({
       analysisId: analysis.analysis_id,
       repoName: analysis.repo.name,
@@ -306,6 +315,7 @@ export function AnalysisPage() {
             onOpenFile={(path, line) => setTab("inspector", line ? { file: path, line: String(line) } : { file: path })}
           />
         )}
+        {tab === "openapi" && <OpenApiTab analysis={analysis} onOpenFile={(path, line) => setTab("inspector", line ? { file: path, line: String(line) } : { file: path })} />}
         {tab === "chat" && <div className="h-full"><ChatPanel scopeType="analysis" scopeId={analysis.analysis_id} /></div>}
       </div>
     </section>

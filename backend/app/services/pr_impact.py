@@ -597,6 +597,16 @@ def get_run(user: dict, run_id: str) -> dict:
     return payload
 
 
+def openapi_diff(user: dict, run_id: str) -> dict:
+    from app.services import openapi
+
+    require(user, "repositories", "read")
+    row = _run_row(run_id)
+    if row["status"] != "completed" or not row["base_analysis_id"] or not row["head_analysis_id"]:
+        return {"available": False, "message": "The run has not completed."}
+    return openapi.compare_analyses(row["base_analysis_id"], row["head_analysis_id"])
+
+
 def _cross_repo(repo_id: str, result: dict) -> dict:
     """Consumers in other repositories (from the system landscapes this repository belongs to) of the affected
     endpoints, and of topics published from changed or impacted files. Computed when viewed, so landscapes created
@@ -957,6 +967,17 @@ def run_markdown(user: dict, run_id: str) -> str:
                 for c in items[:REPORT_LIMIT]:
                     add(f"- **[{str(c.get('severity', '')).upper()}]** {c.get('category')}: {c.get('title')}" + (f" (`{c['path']}`)" if c.get("path") else ""))
                 add("")
+
+    contract = openapi_diff(user, run_id)
+    if contract.get("available") and contract.get("changes"):
+        add(f"## API Contract (OpenAPI) Changes — {contract['breaking']} breaking, {contract['non_breaking']} non-breaking")
+        add("")
+        add("| Severity | Operation | Where | Change |")
+        add("| :--- | :--- | :--- | :--- |")
+        for c in sorted(contract["changes"], key=lambda c: (c["severity"] != "breaking", c["operation"]))[:REPORT_LIMIT]:
+            add(f"| {c['severity']} | `{_cell(c['operation'])}` | {_cell(c.get('where'))} | {_cell(c['change'])} |")
+        more(contract["changes"], REPORT_LIMIT, "change(s)")
+        add("")
 
     cross = run.get("cross_repo") or {}
     if cross.get("in_landscape"):

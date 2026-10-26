@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse, Response
 
 from app.deps import current_user
-from app.services import landscape
+from app.services import landscape, openapi
 
 router = APIRouter(prefix="/landscapes", tags=["landscapes"])
 
@@ -93,3 +93,15 @@ def report_pdf(landscape_id: str, user: dict = Depends(current_user)):
 def export_xlsx(landscape_id: str, user: dict = Depends(current_user)):
     return Response(landscape.export_xlsx(user, landscape_id), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="LANDSCAPE-{landscape_id[:8]}.xlsx"'})
+
+
+@router.get("/{landscape_id}/external-openapi")
+def external_openapi(landscape_id: str, name: str, version: str = "3.0.3", format: str = "yaml", user: dict = Depends(current_user)):
+    return openapi.external_spec(user, landscape_id, name, version, format)
+
+
+@router.get("/{landscape_id}/external-openapi/download")
+def external_openapi_download(landscape_id: str, name: str, version: str = "3.0.3", format: str = "yaml", user: dict = Depends(current_user)):
+    result = openapi.external_spec(user, landscape_id, name, version, format)
+    return Response(result["text"].encode("utf-8"), media_type="application/json" if format == "json" else "application/yaml",
+                    headers={"Content-Disposition": f'attachment; filename="{result["filename"]}"'})

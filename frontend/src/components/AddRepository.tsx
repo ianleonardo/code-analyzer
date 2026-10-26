@@ -1,77 +1,223 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError, api, compact, errorText, post } from "../api";
+import { ApiError, api, compact, errorText, post, timeAgo } from "../api";
 import type { Branch, GitCheck, Repository } from "../types";
 import { BranchPicker } from "./BranchPicker";
 import { GitSignInDialog } from "./GitSignIn";
-import { ErrorNote, Field, Modal, Spinner } from "./ui";
+import { filterFolderFiles, uploadFolderFiles, type FolderSelection } from "./folderUpload";
+import { ErrorNote, Field, HealthGauge, Modal, ShortSha, SourceBadge, Spinner } from "./ui";
 
 type Source = "remote" | "zip" | "local";
 
-const EXCLUDED_DIRS = new Set([
-  "node_modules", "dist", "build", "out", "target", ".next", ".nuxt", ".svelte-kit", ".output", "__pycache__",
-  "coverage", ".nyc_output", ".git", ".svn", ".hg", ".idea", ".vscode", ".vs", ".venv", "venv", ".tox",
-  ".mypy_cache", ".pytest_cache", ".ruff_cache", ".gradle", ".terraform", "bower_components", ".cache",
-  ".parcel-cache", "storybook-static", "site-packages", "Pods", "DerivedData", ".angular", ".turbo", ".yarn",
-  ".pnpm-store", "jspm_packages", "elm-stuff", "_build", "deps", ".dart_tool", ".expo", "vendor",
-]);
-
-const ALLOWED_HIDDEN_DIRS = new Set([".github", ".gitlab", ".circleci", ".devcontainer", ".husky"]);
-
-export interface FolderSelection {
-  folderName: string;
-  kept: Array<{ file: File; path: string }>;
-  skippedCount: number;
-  totalBytes: number;
+export interface ExistingCheckResult {
+  exists: boolean;
+  repo?: {
+    repo_id: string;
+    name: string;
+    source_type: string;
+    url: string;
+    default_branch: string;
+    created_at: string;
+  };
+  latest_analysis?: {
+    analysis_id: string;
+    branch: string;
+    commit_sha: string;
+    commit_message: string;
+    commit_date: string;
+    health_score: number | null;
+    file_count: number;
+    loc_total: number;
+    created_at: string;
+  };
+  version_status?: "same" | "newer" | "older" | "different" | "existing_repo_no_runs";
+  version_label?: string;
+  message?: string;
+  differences?: {
+    current_branch?: string;
+    existing_branch?: string;
+    current_sha?: string;
+    existing_sha?: string;
+    current_file_count?: number;
+    existing_file_count?: number;
+  };
 }
 
-export function filterFolderFiles(fileList: FileList | File[]): FolderSelection {
-  const raw = Array.from(fileList);
-  let folderName = "";
-  const kept: Array<{ file: File; path: string }> = [];
-  let skippedCount = 0;
-  let totalBytes = 0;
+function ExistPromptModal({
+  info,
+  onClose,
+  onProceed,
+  busy,
+}: {
+  info: ExistingCheckResult;
+  onClose: () => void;
+  onProceed: () => void;
+  busy: boolean;
+}) {
+  const navigate = useNavigate();
+  const repo = info.repo;
+  const analysis = info.latest_analysis;
+  const status = info.version_status;
 
-  for (const file of raw) {
-    const rel = ((file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name)
-      .replace(/\\/g, "/")
-      .replace(/^\/+/, "");
-    const parts = rel.split("/").filter(Boolean);
-    if (!folderName && parts.length > 1) {
-      folderName = parts[0];
-    }
-    const fileName = parts[parts.length - 1] || file.name;
-    if (fileName === ".DS_Store" || fileName === "Thumbs.db") {
-      skippedCount += 1;
-      continue;
-    }
-    const dirParts = parts.slice(parts.length > 1 ? 1 : 0, -1);
-    const shouldSkipDir = dirParts.some(
-      (dir) => EXCLUDED_DIRS.has(dir) || (dir.startsWith(".") && !ALLOWED_HIDDEN_DIRS.has(dir)),
-    );
-    if (shouldSkipDir) {
-      skippedCount += 1;
-      continue;
-    }
-    kept.push({ file, path: rel });
-    totalBytes += file.size;
-  }
+  const statusConfig = {
+    same: {
+      badgeCls: "border-ok/40 bg-ok/10 text-ok",
+      icon: "check_circle",
+      title: "Same Version",
+      desc: "This repository and version has already been analysed in the workspace.",
+    },
+    newer: {
+      badgeCls: "border-primary/40 bg-primary/10 text-primary",
+      icon: "upgrade",
+      title: "Newer Version",
+      desc: "The commit / version you are registering is newer than the previous analysis.",
+    },
+    older: {
+      badgeCls: "border-warning/40 bg-warning/10 text-warning",
+      icon: "history",
+      title: "Older Version",
+      desc: "The commit / version you are registering is older than the existing analysis.",
+    },
+    different: {
+      badgeCls: "border-line-strong bg-elevated text-ink",
+      icon: "difference",
+      title: "Different Version / Branch",
+      desc: "A different commit or branch is being registered for an existing repository.",
+    },
+    existing_repo_no_runs: {
+      badgeCls: "border-line-strong bg-elevated text-muted",
+      icon: "info",
+      title: "Repository Exists",
+      desc: "This repository is already registered, but has no completed runs yet.",
+    },
+  }[status || "different"] || {
+    badgeCls: "border-line-strong bg-elevated text-ink",
+    icon: "info",
+    title: info.version_label || "Repository Exists",
+    desc: info.message || "",
+  };
 
-  return { folderName, kept, skippedCount, totalBytes };
-}
+  return (
+    <Modal
+      title="Repository Already Exists"
+      onClose={onClose}
+      width="max-w-lg"
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          {repo && (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                onClose();
+                navigate(analysis ? `/analyses/${analysis.analysis_id}` : `/repositories/${repo.repo_id}`);
+              }}
+              disabled={busy}
+            >
+              <span className="material-symbols-outlined icon-sm">open_in_new</span>
+              Open existing repository
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={onProceed}
+          >
+            <span className="material-symbols-outlined icon-sm">play_arrow</span>
+            {busy ? "Starting…" : "Proceed & re-analyse"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {/* Status banner */}
+        <div className={`flex items-start gap-3 border p-3 ${statusConfig.badgeCls}`}>
+          <span className="material-symbols-outlined mt-0.5 icon-md shrink-0">{statusConfig.icon}</span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-mono font-semibold text-code">{statusConfig.title}</span>
+              {repo && <SourceBadge source={repo.source_type} />}
+            </div>
+            <p className="mt-1 text-body-sm text-ink">{info.message}</p>
+            <p className="mt-0.5 font-mono text-micro opacity-80">{statusConfig.desc}</p>
+          </div>
+        </div>
 
-export async function uploadFolderFiles(
-  kept: Array<{ file: File; path: string }>,
-  opts: { name?: string; repoId?: string } = {},
-): Promise<Repository> {
-  const form = new FormData();
-  if (opts.name) form.append("name", opts.name);
-  if (opts.repoId) form.append("repo_id", opts.repoId);
-  for (const item of kept) {
-    form.append("files", item.file, item.path);
-    form.append("paths", item.path);
-  }
-  return api<Repository>("/api/repositories/upload-folder", { method: "POST", body: form });
+        {/* Comparison card */}
+        <div className="border border-line bg-surface/50 p-3">
+          <div className="label-micro mb-2 text-faint">Version comparison</div>
+          <div className="grid grid-cols-2 gap-3 text-body-sm">
+            <div className="border-r border-line pr-3">
+              <div className="font-mono text-micro font-semibold text-primary">NEW REGISTRATION</div>
+              <div className="mt-1 space-y-1">
+                <div>
+                  <span className="text-faint text-micro">Branch: </span>
+                  <span className="font-mono text-code text-ink">{info.differences?.current_branch || "—"}</span>
+                </div>
+                {info.differences?.current_sha && (
+                  <div>
+                    <span className="text-faint text-micro">Commit: </span>
+                    <ShortSha sha={info.differences.current_sha} />
+                  </div>
+                )}
+                {typeof info.differences?.current_file_count === "number" && (
+                  <div>
+                    <span className="text-faint text-micro">Files: </span>
+                    <span className="font-mono text-code text-ink">{compact(info.differences.current_file_count)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="font-mono text-micro font-semibold text-muted">PREVIOUS ANALYSIS</div>
+              {analysis ? (
+                <div className="mt-1 space-y-1">
+                  <div>
+                    <span className="text-faint text-micro">Branch: </span>
+                    <span className="font-mono text-code text-ink">{analysis.branch || "—"}</span>
+                  </div>
+                  {analysis.commit_sha && (
+                    <div>
+                      <span className="text-faint text-micro">Commit: </span>
+                      <ShortSha sha={analysis.commit_sha} />
+                    </div>
+                  )}
+                  {analysis.file_count && (
+                    <div>
+                      <span className="text-faint text-micro">Files: </span>
+                      <span className="font-mono text-code text-ink">
+                        {compact(analysis.file_count)} {analysis.loc_total ? `(${compact(analysis.loc_total)} LOC)` : ""}
+                      </span>
+                    </div>
+                  )}
+                  {analysis.health_score !== null && analysis.health_score !== undefined && (
+                    <div className="flex items-center gap-1.5 pt-0.5">
+                      <span className="text-faint text-micro">Health: </span>
+                      <HealthGauge score={analysis.health_score} size={22} />
+                    </div>
+                  )}
+                  <div className="font-mono text-micro text-faint pt-0.5">
+                    Analysed {timeAgo(analysis.created_at)}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-1 text-faint text-micro italic">No analyses recorded yet</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <p className="text-body-sm text-faint">
+          Would you like to run a new analysis anyway, or navigate directly to the existing repository?
+        </p>
+      </div>
+    </Modal>
+  );
 }
 
 function formatBytes(bytes: number): string {
@@ -104,6 +250,48 @@ export function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [existingCheck, setExistingCheck] = useState<ExistingCheckResult | null>(null);
+  const [checkingExisting, setCheckingExisting] = useState(false);
+  const [promptDialog, setPromptDialog] = useState<ExistingCheckResult | null>(null);
+
+  async function checkExists(): Promise<ExistingCheckResult | null> {
+    const selectedBranchSha = branches.find((b) => b.name === branch)?.sha || "";
+    const payload: Record<string, any> = {
+      source_type: source,
+      url: source === "remote" ? url : "",
+      branch: source === "remote" ? branch : "",
+      commit_sha: selectedBranchSha,
+      name: name || (source === "zip" ? file?.name.replace(/\.(zip|tar\.gz|tgz|tar)$/i, "") : folderSelection?.folderName) || "",
+      file_count: source === "local" ? folderSelection?.kept.length : undefined,
+      total_bytes: source === "local" ? folderSelection?.totalBytes : source === "zip" ? file?.size : undefined,
+    };
+    if (!payload.url && !payload.name) {
+      setExistingCheck(null);
+      return null;
+    }
+    setCheckingExisting(true);
+    try {
+      const res = await post<ExistingCheckResult>("/api/repositories/check-exists", payload);
+      setExistingCheck(res.exists ? res : null);
+      return res;
+    } catch {
+      return null;
+    } finally {
+      setCheckingExisting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (source === "remote" && check?.status === "ok" && branch) {
+      void checkExists();
+    } else if (source === "zip" && (file || name)) {
+      void checkExists();
+    } else if (source === "local" && (folderSelection || name)) {
+      void checkExists();
+    } else {
+      setExistingCheck(null);
+    }
+  }, [source, url, branch, branches, file, folderSelection, name, check?.status]);
 
   async function runCheck() {
     setChecking(true);
@@ -157,6 +345,18 @@ export function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  async function handleRegisterClick() {
+    let checkRes = existingCheck;
+    if (!checkRes && canSubmit) {
+      checkRes = await checkExists();
+    }
+    if (checkRes && checkRes.exists) {
+      setPromptDialog(checkRes);
+      return;
+    }
+    await submit();
+  }
+
   const canSubmit =
     source === "remote"
       ? check?.status === "ok" && !!branch
@@ -172,8 +372,8 @@ export function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
         width="max-w-xl"
         footer={
           <>
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn btn-primary" disabled={!canSubmit || busy} onClick={() => void submit()}>
+            <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+            <button type="button" className="btn btn-primary" disabled={!canSubmit || busy} onClick={() => void handleRegisterClick()}>
               <span className="material-symbols-outlined icon-sm">play_arrow</span>
               {busy ? "Starting…" : "Register & analyse"}
             </button>
@@ -187,12 +387,31 @@ export function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
               ["zip", "folder_zip", "Upload archive"],
               ["local", "folder_open", "Local folder"],
             ] as const).map(([key, icon, label]) => (
-              <button key={key} type="button" className={`flex h-9 items-center justify-center gap-1.5 font-mono text-code ${source === key ? "bg-primary/10 text-primary" : "text-muted hover:text-ink"}`} onClick={() => { setSource(key); setError(""); }}>
+              <button key={key} type="button" className={`flex h-9 items-center justify-center gap-1.5 font-mono text-code ${source === key ? "bg-primary/10 text-primary" : "text-muted hover:text-ink"}`} onClick={() => { setSource(key); setError(""); setExistingCheck(null); }}>
                 <span className="material-symbols-outlined icon-sm">{icon}</span>
                 {label}
               </button>
             ))}
           </div>
+
+          {checkingExisting && <Spinner label="Checking if repository exists…" />}
+          {existingCheck?.exists && (
+            <div className="flex items-center justify-between border border-warning/40 bg-warning/10 px-2.5 py-1.5 text-body-sm text-warning">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined icon-sm">warning</span>
+                <span>
+                  <strong>Repository already exists:</strong> {existingCheck.version_label}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="link text-micro"
+                onClick={() => setPromptDialog(existingCheck)}
+              >
+                View prompt & details →
+              </button>
+            </div>
+          )}
 
           {source === "remote" && (
             <>
@@ -330,6 +549,17 @@ export function AddRepositoryDialog({ onClose }: { onClose: () => void }) {
             setSignIn(false);
             void runCheck();
           }}
+        />
+      )}
+      {promptDialog && (
+        <ExistPromptModal
+          info={promptDialog}
+          onClose={() => setPromptDialog(null)}
+          onProceed={async () => {
+            setPromptDialog(null);
+            await submit();
+          }}
+          busy={busy}
         />
       )}
     </>

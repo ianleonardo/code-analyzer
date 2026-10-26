@@ -7,6 +7,7 @@ import re
 import shutil
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from app import config, db
@@ -87,6 +88,201 @@ def _row(repo_id: str) -> dict:
     if row is None:
         raise AppError(404, "Repository not found")
     return row
+
+
+def check_existing(user: dict, body: dict) -> dict:
+    """Check whether a repository being added already exists, and compare its version."""
+    require(user, "repositories", "read")
+    source_type = str(body.get("source_type") or "remote").strip()
+    url = str(body.get("url") or "").strip()
+    name = str(body.get("name") or "").strip()
+    branch = str(body.get("branch") or "").strip()
+    commit_sha = str(body.get("commit_sha") or "").strip()
+    file_count = body.get("file_count")
+    total_bytes = body.get("total_bytes")
+
+    existing_repo = None
+    ref = None
+    if source_type in ("remote", "github", "bitbucket", "bitbucket_server", "git") and url:
+        try:
+            ref = git_hosts.parse_url(url)
+            existing_repo = db.fetchone(
+                "SELECT * FROM repositories WHERE lower(url) = lower(?) OR (lower(host) = lower(?) AND lower(owner) = lower(?) AND lower(slug) = lower(?))",
+                [ref.web_url, ref.host, ref.owner, ref.slug],
+            )
+        except Exception:
+            existing_repo = db.fetchone("SELECT * FROM repositories WHERE lower(url) = lower(?)", [url])
+    elif name:
+        existing_repo = db.fetchone("SELECT * FROM repositories WHERE lower(name) = lower(?)", [name])
+
+    if not existing_repo and url:
+        existing_repo = db.fetchone("SELECT * FROM repositories WHERE lower(url) = lower(?)", [url])
+
+    if not existing_repo and name:
+        existing_repo = db.fetchone("SELECT * FROM repositories WHERE lower(name) = lower(?)", [name])
+
+    if not existing_repo:
+        return {"exists": False}
+
+    repo_id = existing_repo["repo_id"]
+    latest_analysis = None
+    if branch:
+        latest_analysis = db.fetchone(
+            "SELECT * FROM analyses WHERE repo_id = ? AND branch = ? AND coalesce(purpose, 'branch') = 'branch' ORDER BY created_at DESC LIMIT 1",
+            [repo_id, branch],
+        )
+    if not latest_analysis:
+        latest_analysis = db.fetchone(
+            "SELECT * FROM analyses WHERE repo_id = ? AND coalesce(purpose, 'branch') = 'branch' ORDER BY created_at DESC LIMIT 1",
+            [repo_id],
+        )
+
+    if not latest_analysis:
+        return {
+            "exists": True,
+            "repo": {
+                "repo_id": existing_repo["repo_id"],
+                "name": existing_repo["name"],
+                "source_type": existing_repo["source_type"],
+                "url": existing_repo["url"],
+                "default_branch": existing_repo["default_branch"],
+                "created_at": str(existing_repo["created_at"]),
+            },
+            "latest_analysis": None,
+            "version_status": "existing_repo_no_runs",
+            "version_label": "Existing repository (no previous runs)",
+            "message": f"Repository '{existing_repo['name']}' already exists, but has not completed any analyses yet.",
+            "differences": {
+                "current_branch": branch,
+                "existing_branch": None,
+                "current_sha": commit_sha,
+                "existing_sha": None,
+            },
+        }
+
+    existing_sha = (latest_analysis.get("commit_sha") or "").strip()
+    existing_branch = (latest_analysis.get("branch") or "").strip()
+    existing_date_str = latest_analysis.get("commit_date") or ""
+
+    version_status = "different"
+    version_label = "Different version"
+    message = f"Repository '{existing_repo['name']}' already exists in workspace."
+
+    if commit_sha:
+        if existing_sha and commit_sha.lower() == existing_sha.lower():
+            version_status = "same"
+            version_label = "Same version"
+            message = f"Repository '{existing_repo['name']}' already has an analysis with the exact same commit ({commit_sha[:7]}) on branch '{existing_branch}'."
+        elif existing_sha:
+            remote_date_str = None
+            if ref:
+                try:
+                    cred = git_credentials.credential_for(user["user_id"], ref)
+                    if ref.provider == git_hosts.GITHUB:
+                        res = git_hosts._get(f"{ref.api_base}/repos/{ref.owner}/{ref.slug}/commits/{commit_sha}", cred, ref.provider)
+                        if res.status_code == 200:
+                            remote_date_str = (res.json().get("commit") or {}).get("author", {}).get("date")
+                    elif ref.provider == git_hosts.BITBUCKET:
+                        res = git_hosts._get(f"{ref.api_base}/repositories/{ref.owner}/{ref.slug}/commit/{commit_sha}", cred, ref.provider)
+                        if res.status_code == 200:
+                            remote_date_str = res.json().get("date")
+                except Exception:
+                    pass
+
+            if remote_date_str and existing_date_str:
+                try:
+                    d_remote = datetime.fromisoformat(remote_date_str.replace("Z", "+00:00"))
+                    d_exist = datetime.fromisoformat(existing_date_str.replace("Z", "+00:00"))
+                    if d_remote > d_exist:
+                        version_status = "newer"
+                        version_label = "Newer version"
+                        message = f"Repository '{existing_repo['name']}' has a newer commit ({commit_sha[:7]}) than the previous analysis ({existing_sha[:7]})."
+                    elif d_remote < d_exist:
+                        version_status = "older"
+                        version_label = "Older version"
+                        message = f"Repository '{existing_repo['name']}' selected commit ({commit_sha[:7]}) is older than the previous analysis ({existing_sha[:7]})."
+                    else:
+                        version_status = "different"
+                        version_label = "Different version"
+                        message = f"Repository '{existing_repo['name']}' commit ({commit_sha[:7]}) differs from previous analysis ({existing_sha[:7]})."
+                except Exception:
+                    version_status = "different"
+                    version_label = "Different version"
+                    message = f"Repository '{existing_repo['name']}' commit ({commit_sha[:7]}) differs from previous analysis ({existing_sha[:7]})."
+            else:
+                if branch and existing_branch and branch != existing_branch:
+                    version_status = "different"
+                    version_label = f"Different branch ('{branch}' vs '{existing_branch}')"
+                    message = f"Repository '{existing_repo['name']}' exists with branch '{existing_branch}'. You are adding branch '{branch}'."
+                else:
+                    version_status = "different"
+                    version_label = "Different commit"
+                    message = f"Repository '{existing_repo['name']}' commit ({commit_sha[:7]}) differs from previous analysis ({existing_sha[:7]})."
+        else:
+            version_status = "different"
+            version_label = "New commit"
+            message = f"Repository '{existing_repo['name']}' already exists; new commit ({commit_sha[:7]}) will be analysed."
+    elif file_count is not None:
+        existing_files = latest_analysis.get("file_count") or 0
+        if existing_files > 0:
+            if file_count == existing_files:
+                version_status = "same"
+                version_label = "Same version (identical file count)"
+                message = f"Repository '{existing_repo['name']}' already exists with {existing_files} files (analysed on {str(latest_analysis['created_at'])[:10]})."
+            elif file_count > existing_files:
+                version_status = "newer"
+                version_label = "Newer / larger version"
+                message = f"Repository '{existing_repo['name']}' has {file_count} files (increased from {existing_files} files previously analysed)."
+            else:
+                version_status = "older"
+                version_label = "Older / smaller version"
+                message = f"Repository '{existing_repo['name']}' has {file_count} files (decreased from {existing_files} files previously analysed)."
+        else:
+            version_status = "different"
+            version_label = "Existing repository"
+            message = f"Repository '{existing_repo['name']}' already exists with prior analyses."
+    elif branch and existing_branch and branch == existing_branch:
+        version_status = "same"
+        version_label = "Same branch"
+        message = f"Repository '{existing_repo['name']}' already exists on branch '{branch}'."
+    else:
+        version_status = "different"
+        version_label = "Existing repository"
+        message = f"Repository '{existing_repo['name']}' already exists with prior analyses."
+
+    return {
+        "exists": True,
+        "repo": {
+            "repo_id": existing_repo["repo_id"],
+            "name": existing_repo["name"],
+            "source_type": existing_repo["source_type"],
+            "url": existing_repo["url"],
+            "default_branch": existing_repo["default_branch"],
+            "created_at": str(existing_repo["created_at"]),
+        },
+        "latest_analysis": {
+            "analysis_id": latest_analysis["analysis_id"],
+            "branch": latest_analysis.get("branch") or "",
+            "commit_sha": latest_analysis.get("commit_sha") or "",
+            "commit_message": latest_analysis.get("commit_message") or "",
+            "commit_date": latest_analysis.get("commit_date") or "",
+            "health_score": latest_analysis.get("health_score"),
+            "file_count": latest_analysis.get("file_count"),
+            "loc_total": latest_analysis.get("loc_total"),
+            "created_at": str(latest_analysis["created_at"]),
+        },
+        "version_status": version_status,
+        "version_label": version_label,
+        "message": message,
+        "differences": {
+            "current_branch": branch,
+            "existing_branch": existing_branch,
+            "current_sha": commit_sha,
+            "existing_sha": existing_sha,
+            "current_file_count": file_count,
+            "existing_file_count": latest_analysis.get("file_count"),
+        },
+    }
 
 
 def create_remote(user: dict, body: dict) -> dict:

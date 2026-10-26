@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, del, downloadFile, errorText, formatDateTime, post } from "../../api";
 import { useAuth } from "../../auth";
 import { DependencyGraph, EDGE_KINDS } from "../../components/DependencyGraph";
+import { OpenApiDiffPanel } from "../../components/openapi/Panels";
 import { ConfirmDialog, Empty, ErrorNote, LayerPill, Markdown, Meter, PageHeader, SeverityBadge, ShortSha, Spinner, StatusBadge } from "../../components/ui";
 import { can } from "../../permissions";
 import type { ChangedSymbol, ConfigKeyChange, EntryPoint, FileDiffPayload, GraphEdge, GraphNode, ImpactEvent, ImpactRun, ImpactedFile } from "../../types";
@@ -239,6 +240,7 @@ function SummaryTab({ run }: { run: ImpactRun }) {
           )}
         </section>
       </div>
+      <OpenApiDiffPanel url={`/api/impact-runs/${run.run_id}/openapi-diff`} title="API contract changes (OpenAPI at merge-base vs head)" />
       <CrossRepoPanel run={run} />
       <section className="panel p-3">
         <div className="label-micro">Limits of this analysis</div>

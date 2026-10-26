@@ -129,3 +129,49 @@ def test_browser_folder_upload_works_without_server_local_paths(client, admin, s
     assert analysis["status"] == "completed", analysis["error"]
     files = {f["path"] for f in client.get(f"/api/analyses/{analysis_id}/files?limit=500", headers=admin).json()["items"]}
     assert "app/services/order_service.py" in files
+
+
+def test_check_existing_repository(client, admin, sample_repo):
+    # Before adding
+    res = client.post("/api/repositories/check-exists", json={"name": "orders"}, headers=admin).json()
+    assert res["exists"] is False
+
+    # Add repo
+    analysis = _analyse(client, admin, sample_repo, name="orders")
+    file_count = analysis["file_count"]
+
+    # Check same
+    res = client.post("/api/repositories/check-exists", json={"name": "orders", "file_count": file_count}, headers=admin).json()
+    assert res["exists"] is True
+    assert res["version_status"] == "same"
+
+    # Check newer / larger
+    res = client.post("/api/repositories/check-exists", json={"name": "orders", "file_count": file_count + 5}, headers=admin).json()
+    assert res["exists"] is True
+    assert res["version_status"] == "newer"
+
+    # Check older / smaller
+    res = client.post("/api/repositories/check-exists", json={"name": "orders", "file_count": max(1, file_count - 5)}, headers=admin).json()
+    assert res["exists"] is True
+    assert res["version_status"] == "older"
+
+    # Check remote with commit SHA
+    from app import db
+    db.exec_sql("UPDATE analyses SET commit_sha = ? WHERE analysis_id = ?", ["3c57d3b91234", analysis["analysis_id"]])
+
+    res = client.post(
+        "/api/repositories/check-exists",
+        json={"source_type": "remote", "name": "orders", "commit_sha": "3c57d3b91234", "branch": analysis["branch"]},
+        headers=admin,
+    ).json()
+    assert res["exists"] is True
+    assert res["version_status"] == "same"
+
+    # Check remote with different commit SHA
+    res = client.post(
+        "/api/repositories/check-exists",
+        json={"source_type": "remote", "name": "orders", "commit_sha": "different123456789", "branch": analysis["branch"]},
+        headers=admin,
+    ).json()
+    assert res["exists"] is True
+    assert res["version_status"] in ("different", "newer", "older")

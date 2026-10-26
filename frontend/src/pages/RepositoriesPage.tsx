@@ -8,6 +8,8 @@ import { can } from "../permissions";
 import type { AnalysisBrief, Repository } from "../types";
 
 const SOURCE_ORDER = ["github", "bitbucket", "bitbucket_server", "git", "local", "zip"];
+const PROJECT_STORAGE_KEY = "ca_open_project_key";
+const REPO_STORAGE_KEY = "ca_open_repo_id";
 
 function getProjectName(repo: Repository): string {
   if (repo.owner && repo.owner.trim()) return repo.owner.trim();
@@ -69,8 +71,21 @@ export function RepositoriesPage() {
   const [q, setQ] = useState("");
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [collapsedSources, setCollapsedSources] = useState<Record<string, boolean>>({});
-  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({});
-  const [collapsedRepos, setCollapsedRepos] = useState<Record<string, boolean>>({});
+  const [openProjectKey, setOpenProjectKey] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(PROJECT_STORAGE_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [openRepoId, setOpenRepoId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(REPO_STORAGE_KEY) || null;
+    } catch {
+      return null;
+    }
+  });
+  const [allExpanded, setAllExpanded] = useState<boolean>(false);
 
   useEffect(() => {
     const load = () => api<Repository[]>("/api/repositories").then(setRepos).catch(() => setRepos([]));
@@ -165,18 +180,122 @@ export function RepositoriesPage() {
     });
   }, [filtered]);
 
+  // Ensure parent source and project containing openRepoId are expanded
+  useEffect(() => {
+    if (!openRepoId || !repos) return;
+    const targetRepo = repos.find((r) => r.repo_id === openRepoId);
+    if (targetRepo) {
+      const projName = getProjectName(targetRepo);
+      const projKey = `${targetRepo.source_type}::${projName}`;
+      setOpenProjectKey(projKey);
+      try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, projKey);
+      } catch {
+        // ignore
+      }
+      setCollapsedSources((s) => (s[targetRepo.source_type] ? { ...s, [targetRepo.source_type]: false } : s));
+    }
+  }, [openRepoId, repos]);
+
   function expandAll() {
     setCollapsedSources({});
-    setCollapsedProjects({});
-    setCollapsedRepos({});
+    setAllExpanded(true);
   }
 
-  function collapseAllBranches() {
-    const nextRepos: Record<string, boolean> = {};
-    for (const r of repos ?? []) {
-      nextRepos[r.repo_id] = true;
+  function collapseAll() {
+    setAllExpanded(false);
+    setOpenProjectKey(null);
+    setOpenRepoId(null);
+    try {
+      localStorage.removeItem(PROJECT_STORAGE_KEY);
+      localStorage.removeItem(REPO_STORAGE_KEY);
+    } catch {
+      // ignore
     }
-    setCollapsedRepos(nextRepos);
+  }
+
+  function toggleProject(projectKey: string) {
+    if (allExpanded) {
+      setAllExpanded(false);
+      setOpenProjectKey(projectKey);
+      try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, projectKey);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+
+    if (openProjectKey === projectKey) {
+      // Accordion close
+      setOpenProjectKey(null);
+      setOpenRepoId(null);
+      try {
+        localStorage.removeItem(PROJECT_STORAGE_KEY);
+        localStorage.removeItem(REPO_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+    } else {
+      // Accordion open: open this project and close other projects
+      setOpenProjectKey(projectKey);
+      try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, projectKey);
+      } catch {
+        // ignore
+      }
+      // If current open repo belongs to a different project, reset it
+      if (openRepoId && repos) {
+        const currentRepo = repos.find((r) => r.repo_id === openRepoId);
+        if (currentRepo) {
+          const currentProjKey = `${currentRepo.source_type}::${getProjectName(currentRepo)}`;
+          if (currentProjKey !== projectKey) {
+            setOpenRepoId(null);
+            try {
+              localStorage.removeItem(REPO_STORAGE_KEY);
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function toggleRepo(repoId: string, projectKey?: string) {
+    if (projectKey) {
+      setOpenProjectKey(projectKey);
+      try {
+        localStorage.setItem(PROJECT_STORAGE_KEY, projectKey);
+      } catch {
+        // ignore
+      }
+    }
+    if (allExpanded) {
+      setAllExpanded(false);
+      setOpenRepoId(repoId);
+      try {
+        localStorage.setItem(REPO_STORAGE_KEY, repoId);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    if (openRepoId === repoId) {
+      setOpenRepoId(null);
+      try {
+        localStorage.removeItem(REPO_STORAGE_KEY);
+      } catch {
+        // ignore
+      }
+    } else {
+      setOpenRepoId(repoId);
+      try {
+        localStorage.setItem(REPO_STORAGE_KEY, repoId);
+      } catch {
+        // ignore
+      }
+    }
   }
 
   return (
@@ -228,8 +347,8 @@ export function RepositoriesPage() {
               <button type="button" className="btn h-7 px-2 text-micro" onClick={expandAll}>
                 <span className="material-symbols-outlined icon-sm">unfold_more</span>Expand all
               </button>
-              <button type="button" className="btn h-7 px-2 text-micro" onClick={collapseAllBranches}>
-                <span className="material-symbols-outlined icon-sm">unfold_less</span>Collapse branches
+              <button type="button" className="btn h-7 px-2 text-micro" onClick={collapseAll}>
+                <span className="material-symbols-outlined icon-sm">unfold_less</span>Collapse all
               </button>
             </div>
           </div>
@@ -265,19 +384,19 @@ export function RepositoriesPage() {
               {!sourceCollapsed && (
                 <div className="divide-y divide-line">
                   {sourceGroup.projects.map((project) => {
-                    const projectCollapsed = !!collapsedProjects[project.projectKey];
+                    const isProjectOpen = allExpanded || !!q.trim() || openProjectKey === project.projectKey;
                     return (
                       <div key={project.projectKey}>
                         {/* Level 2: Project / Owner Sub-header */}
                         <div
-                          className="flex cursor-pointer select-none items-center justify-between bg-bg/60 px-3 py-2 hover:bg-hover/40"
-                          onClick={() =>
-                            setCollapsedProjects((p) => ({ ...p, [project.projectKey]: !p[project.projectKey] }))
-                          }
+                          className={`flex cursor-pointer select-none items-center justify-between px-3 py-2 transition-colors ${
+                            isProjectOpen ? "bg-bg/90 border-l-2 border-primary" : "bg-bg/60 hover:bg-hover/40"
+                          }`}
+                          onClick={() => toggleProject(project.projectKey)}
                         >
                           <div className="flex items-center gap-2 pl-2">
                             <span className="material-symbols-outlined icon-sm text-faint">
-                              {projectCollapsed ? "chevron_right" : "expand_more"}
+                              {isProjectOpen ? "expand_more" : "chevron_right"}
                             </span>
                             <span className="material-symbols-outlined icon-sm text-primary">folder_special</span>
                             <span className="font-mono text-code font-semibold text-ink">{project.projectName}</span>
@@ -295,11 +414,14 @@ export function RepositoriesPage() {
                                 <HealthGauge score={project.avgHealth} size={24} />
                               </div>
                             )}
+                            <span className="font-mono text-micro text-faint">
+                              {isProjectOpen ? "Collapse project" : "Expand project"}
+                            </span>
                           </div>
                         </div>
 
                         {/* Level 3 & 4: Repositories and their Branches */}
-                        {!projectCollapsed && (
+                        {isProjectOpen && (
                           <table className="w-full">
                             <thead className="table-head">
                               <tr>
@@ -315,34 +437,58 @@ export function RepositoriesPage() {
                             <tbody>
                               {project.repos.map((repo) => {
                                 const branchRuns = getBranchRuns(repo);
-                                const repoCollapsed = !!collapsedRepos[repo.repo_id];
+                                const isOpen = allExpanded || openRepoId === repo.repo_id;
                                 const displayName = getRepoDisplayName(repo);
                                 return (
                                   <Fragment key={repo.repo_id}>
                                     {/* Level 3: Repository Row */}
-                                    <tr className="table-row bg-surface/40">
+                                    <tr
+                                      className={`table-row cursor-pointer transition-colors ${
+                                        isOpen
+                                          ? "bg-primary/5 border-l-2 border-primary"
+                                          : "bg-surface/40 hover:bg-surface/70"
+                                      }`}
+                                      onClick={(e) => {
+                                        const target = e.target as HTMLElement;
+                                        if (target.closest("a, button, input")) return;
+                                        toggleRepo(repo.repo_id, project.projectKey);
+                                      }}
+                                    >
                                       <td className="max-w-[380px] pl-9">
                                         <div className="flex items-start gap-2">
                                           <button
                                             type="button"
-                                            className="mt-0.5 text-muted hover:text-ink"
-                                            title={repoCollapsed ? "Expand branches" : "Collapse branches"}
-                                            onClick={() =>
-                                              setCollapsedRepos((r) => ({ ...r, [repo.repo_id]: !r[repo.repo_id] }))
-                                            }
+                                            className="mt-0.5 text-muted hover:text-ink focus:outline-none"
+                                            title={isOpen ? "Collapse branches" : "Expand branches"}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleRepo(repo.repo_id, project.projectKey);
+                                            }}
                                           >
                                             <span className="material-symbols-outlined icon-sm">
-                                              {repoCollapsed ? "chevron_right" : "expand_more"}
+                                              {isOpen ? "expand_more" : "chevron_right"}
                                             </span>
                                           </button>
                                           <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
-                                              <span className="material-symbols-outlined icon-sm text-primary">
+                                              <span
+                                                className={`material-symbols-outlined icon-sm ${
+                                                  isOpen ? "text-primary" : "text-muted"
+                                                }`}
+                                              >
                                                 inventory_2
                                               </span>
                                               <Link
                                                 to={`/repositories/${repo.repo_id}`}
                                                 className="font-mono text-code font-semibold text-ink hover:text-primary hover:underline"
+                                                onClick={() => {
+                                                  try {
+                                                    localStorage.setItem(PROJECT_STORAGE_KEY, project.projectKey);
+                                                    localStorage.setItem(REPO_STORAGE_KEY, repo.repo_id);
+                                                  } catch {
+                                                    // ignore
+                                                  }
+                                                }}
                                               >
                                                 {displayName}
                                               </Link>
@@ -392,6 +538,14 @@ export function RepositoriesPage() {
                                             to={`/repositories/${repo.repo_id}`}
                                             className="btn h-6 px-2 text-micro"
                                             title="Manage repository & run analysis"
+                                            onClick={() => {
+                                              try {
+                                                localStorage.setItem(PROJECT_STORAGE_KEY, project.projectKey);
+                                                localStorage.setItem(REPO_STORAGE_KEY, repo.repo_id);
+                                              } catch {
+                                                // ignore
+                                              }
+                                            }}
                                           >
                                             Manage
                                           </Link>
@@ -400,7 +554,7 @@ export function RepositoriesPage() {
                                     </tr>
 
                                     {/* Level 4: Branch Sub-rows */}
-                                    {!repoCollapsed &&
+                                    {isOpen &&
                                       (branchRuns.length > 0 ? (
                                         branchRuns.map((bRun, idx) => {
                                           const isLast = idx === branchRuns.length - 1;
@@ -410,7 +564,7 @@ export function RepositoriesPage() {
                                           return (
                                             <tr
                                               key={bRun.analysis_id}
-                                              className="table-row bg-bg/35 hover:bg-hover/60"
+                                              className="table-row bg-bg/35 hover:bg-hover/60 border-l-2 border-primary/30"
                                             >
                                               <td className="pl-16">
                                                 <div className="flex items-center gap-2">
@@ -473,7 +627,7 @@ export function RepositoriesPage() {
                                           );
                                         })
                                       ) : (
-                                        <tr className="table-row bg-bg/35">
+                                        <tr className="table-row bg-bg/35 border-l-2 border-primary/30">
                                           <td className="pl-16" colSpan={7}>
                                             <div className="flex items-center justify-between py-0.5 text-body-sm text-faint">
                                               <span className="flex items-center gap-2 font-mono">

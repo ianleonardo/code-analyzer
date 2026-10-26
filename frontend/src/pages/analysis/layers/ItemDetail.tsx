@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, errorText } from "../../../api";
 import { Mermaid } from "../../../components/Mermaid";
-import { ErrorNote, LayerPill, Spinner } from "../../../components/ui";
+import { ErrorBoundary, ErrorNote, LayerPill, Spinner } from "../../../components/ui";
 import { ScreenWireframe } from "./ScreenWireframe";
 import { KIND_ICON, METHOD_CLASS, type CatalogItem, type Details, type LinkRef, type Trace } from "./types";
 
@@ -226,13 +226,16 @@ function EndpointBody({ d, nav, line }: { d: Details; nav: Nav; line: (n: number
 
 function MethodsTable({ methods, line }: { methods: any[]; line: (n: number) => void }) {
   const [open, setOpen] = useState<string | null>(null);
-  if (!methods?.length) return null;
+  if (!methods?.length || !Array.isArray(methods)) return null;
   return (
     <Section title="Methods / operations" right={<span>{methods.length}</span>}>
       <ul className="divide-y divide-line">
         {methods.map((m, i) => {
-          const key = `${m.name}-${i}`;
-          const extra = (m.rules?.length ?? 0) + (m.throws?.length ?? 0) + (m.sql?.length ?? 0);
+          const key = `${m.name || "method"}-${i}`;
+          const rulesCount = Array.isArray(m.rules) ? m.rules.length : 0;
+          const throwsCount = Array.isArray(m.throws) ? m.throws.length : (m.throws ? 1 : 0);
+          const sqlCount = Array.isArray(m.sql) ? m.sql.length : 0;
+          const extra = rulesCount + throwsCount + sqlCount;
           return (
             <li key={key} className="py-1.5">
               <button type="button" className="flex w-full items-start gap-2 text-left" onClick={() => setOpen(open === key ? null : key)}>
@@ -241,17 +244,57 @@ function MethodsTable({ methods, line }: { methods: any[]; line: (n: number) => 
                 {m.transactional && <span className="chip border-c-tx/40 text-ink" title={JSON.stringify(m.transactional)}>tx{m.transactional.read_only ? " ro" : ""}</span>}
                 {m.operation && <span className="chip border-line-strong text-muted">{m.operation}</span>}
                 {m.async && <span className="chip border-line-strong text-muted">async</span>}
+                {m.throws && !Array.isArray(m.throws) && <span className="chip border-critical/40 text-critical">throws</span>}
                 {extra > 0 && <span className="chip border-c-validation/40 text-ink">{extra} rules</span>}
               </button>
               {open === key && (
                 <div className="ml-6 mt-1 space-y-1.5 text-body-sm">
                   {m.line ? <button type="button" className="link font-mono text-micro" onClick={() => line(m.line)}>line {m.line}{m.end_line ? `–${m.end_line}` : ""}</button> : null}
-                  {m.annotations?.length > 0 && <Chips values={m.annotations} />}
-                  {m.calls?.length > 0 && <div><span className="label-micro">calls </span><span className="font-mono text-code">{m.calls.join(", ")}</span></div>}
-                  {m.rules?.map((r: any, j: number) => <div key={j} className="border-l-2 border-c-validation pl-2">if <code>{r.condition}</code> → {r.outcome} <span className="font-mono text-micro text-faint">L{r.line}</span></div>)}
-                  {m.throws?.map((t: any, j: number) => <div key={`t${j}`} className="font-mono text-micro text-critical">throws {t.exception}{t.message ? `: ${t.message}` : ""}</div>)}
-                  {m.sql?.map((s: any, j: number) => <Code key={`s${j}`} text={s.sql} lang="sql" />)}
-                  {m.tables && <div className="font-mono text-micro text-muted">tables {Object.entries(m.tables).map(([t, o]) => `${t}(${(o as string[]).join("")})`).join(", ")}</div>}
+                  {Array.isArray(m.annotations) && m.annotations.length > 0 && <Chips values={m.annotations} />}
+                  {Array.isArray(m.calls) && m.calls.length > 0 && (
+                    <div>
+                      <span className="label-micro">calls </span>
+                      <span className="font-mono text-code">
+                        {m.calls.map((c: any) => typeof c === "string" ? c : `${c.type || ""}.${c.method || ""}`).join(", ")}
+                      </span>
+                    </div>
+                  )}
+                  {Array.isArray(m.rules) && m.rules.map((r: any, j: number) => (
+                    <div key={j} className="border-l-2 border-c-validation pl-2">
+                      if <code>{r.condition}</code> → {r.outcome} <span className="font-mono text-micro text-faint">L{r.line}</span>
+                    </div>
+                  ))}
+                  {Array.isArray(m.throws) ? (
+                    m.throws.map((t: any, j: number) => (
+                      <div key={`t${j}`} className="font-mono text-micro text-critical">
+                        throws {typeof t === "string" ? t : `${t.exception || t.type || ""}${t.message ? `: ${t.message}` : ""}`}
+                      </div>
+                    ))
+                  ) : typeof m.throws === "string" ? (
+                    <div className="font-mono text-micro text-critical">throws {m.throws}</div>
+                  ) : m.throws === true ? (
+                    <div className="font-mono text-micro text-critical">throws error</div>
+                  ) : null}
+                  {Array.isArray(m.http_calls) && m.http_calls.length > 0 && (
+                    <div className="space-y-1 pt-0.5">
+                      <span className="label-micro">outbound calls</span>
+                      {m.http_calls.map((h: any, j: number) => (
+                        <div key={`h${j}`} className="flex items-center gap-2 font-mono text-micro">
+                          <span className="chip border-line-strong text-primary">{h.method || "CALL"}</span>
+                          <span className="text-ink truncate">{h.url || h.raw_path}</span>
+                          {h.line ? <span className="text-faint">L{h.line}</span> : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {Array.isArray(m.sql) && m.sql.map((s: any, j: number) => (
+                    <Code key={`s${j}`} text={typeof s === "string" ? s : s.sql} lang="sql" />
+                  ))}
+                  {m.tables && typeof m.tables === "object" && (
+                    <div className="font-mono text-micro text-muted">
+                      tables {Object.entries(m.tables).map(([t, o]) => `${t}(${Array.isArray(o) ? o.join("") : String(o)})`).join(", ")}
+                    </div>
+                  )}
                 </div>
               )}
             </li>
@@ -433,15 +476,33 @@ function GenericBody({ item, d, line }: { item: CatalogItem; d: Details; line: (
       return (
         <>
           <Section title="Overview">
-            <KV rows={[["Stereotype", d.stereotype], ["Entity · table", [d.entity, d.table].filter(Boolean).join(" · ")], ["Base", d.base], ["Implements", <Chips values={d.implements ?? []} />],
-              ["Dependencies", <Chips values={d.dependencies ?? []} />], ["Transactional", d.transactional ? "class-level @Transactional" : ""], ["Inherited methods", (d.inherited_methods ?? []).join(", ")],
-              ["Schedule", d.schedule && Object.keys(d.schedule).length ? JSON.stringify(d.schedule) : ""], ["Mapper XML", d.mapper_xml]]} />
+            <KV rows={[
+              ["Stereotype", d.stereotype],
+              ["Entity · table", [d.entity, d.table].filter(Boolean).join(" · ")],
+              ["Base", d.base],
+              ["Implements", <Chips values={Array.isArray(d.implements) ? d.implements : []} />],
+              ["Dependencies", <Chips values={Array.isArray(d.dependencies) ? d.dependencies : []} />],
+              ["Transactional", d.transactional ? "class-level @Transactional" : ""],
+              ["Inherited methods", Array.isArray(d.inherited_methods) ? d.inherited_methods.join(", ") : String(d.inherited_methods || "")],
+              ["Schedule", d.schedule && Object.keys(d.schedule).length ? JSON.stringify(d.schedule) : ""],
+              ["Mapper XML", d.mapper_xml],
+            ]} />
           </Section>
-          {d.state?.length > 0 && <Section title="Exposed state"><Chips values={d.state.map((s: any) => `${s.name}: ${s.type}`)} /></Section>}
-          <MethodsTable methods={d.methods} line={line} />
-          <Rules rules={[]} llm={d.llm_rules} onLine={line} />
+          {Array.isArray(d.state) && d.state.length > 0 && (
+            <Section title="Exposed state">
+              <Chips values={d.state.map((s: any) => (typeof s === "string" ? s : `${s.name || ""}: ${s.type || ""}`))} />
+            </Section>
+          )}
+          <MethodsTable methods={Array.isArray(d.methods) ? d.methods : []} line={line} />
+          <Rules rules={[]} llm={Array.isArray(d.llm_rules) ? d.llm_rules : []} onLine={line} />
           <Section title="Events & outbound calls" empty={!d.events?.length && !d.http_calls?.length}>
-            <Table head={["Kind", "Target", "Line"]} rows={[...(d.events ?? []).map((e: any) => [e.kind, e.name, `L${e.line}`]), ...(d.http_calls ?? []).map((h: any) => [`${h.client} ${h.method}`, h.url, `L${h.line}`])]} />
+            <Table
+              head={["Kind", "Target", "Line"]}
+              rows={[
+                ...(Array.isArray(d.events) ? d.events : []).map((e: any) => [e.kind, e.name, `L${e.line}`]),
+                ...(Array.isArray(d.http_calls) ? d.http_calls : []).map((h: any) => [`${h.client || ""} ${h.method || ""}`.trim(), h.url || h.raw_path || h.path || "", `L${h.line}`]),
+              ]}
+            />
           </Section>
         </>
       );
@@ -528,6 +589,14 @@ function GenericBody({ item, d, line }: { item: CatalogItem; d: Details; line: (
 }
 
 export function ItemDetail({ analysisId, itemId, nav }: { analysisId: string; itemId: string; nav: Nav }) {
+  return (
+    <ErrorBoundary name="Catalog Item Detail">
+      <ItemDetailInner analysisId={analysisId} itemId={itemId} nav={nav} />
+    </ErrorBoundary>
+  );
+}
+
+function ItemDetailInner({ analysisId, itemId, nav }: { analysisId: string; itemId: string; nav: Nav }) {
   const [item, setItem] = useState<CatalogItem | null>(null);
   const [error, setError] = useState("");
   const [showTrace, setShowTrace] = useState(false);

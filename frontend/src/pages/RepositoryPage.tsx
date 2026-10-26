@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { ApiError, api, compact, del, errorText, formatDateTime, post } from "../api";
 import { useAuth } from "../auth";
 import { BranchPicker } from "../components/BranchPicker";
-import { filterFolderFiles, uploadFolderFiles } from "../components/AddRepository";
+import { filterFolderFiles, uploadFolderFiles } from "../components/folderUpload";
 import { GitSignInDialog } from "../components/GitSignIn";
 import { ConfirmDialog, ErrorNote, HealthGauge, Modal, PageHeader, ShortSha, SourceBadge, StatusBadge } from "../components/ui";
 import { can } from "../permissions";
@@ -47,7 +47,14 @@ export function RepositoryPage() {
 
   useEffect(() => {
     load().then(loadBranches).catch((err) => setError(errorText(err)));
-  }, [load, loadBranches]);
+    if (repoId) {
+      try {
+        localStorage.setItem("ca_open_repo_id", repoId);
+      } catch {
+        // ignore
+      }
+    }
+  }, [load, loadBranches, repoId]);
 
   useEffect(() => {
     if (!repo?.analyses?.some((a) => a.status === "running" || a.status === "queued")) return;

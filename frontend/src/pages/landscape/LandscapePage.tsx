@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api, del, downloadFile, errorText, post, timeAgo } from "../../api";
 import { useAuth } from "../../auth";
 import { Mermaid } from "../../components/Mermaid";
+import { ExternalSpecModal } from "../../components/openapi/Panels";
 import { ConfirmDialog, Empty, ErrorNote, Modal, PageHeader, Select, Spinner, SplitPane } from "../../components/ui";
 import { can } from "../../permissions";
 import { LandscapeDialog } from "./LandscapesPage";
@@ -49,7 +50,7 @@ export function EndpointLabel({ text }: { text: string }) {
   return <span className="truncate font-mono text-code text-left">{text}</span>;
 }
 
-export function getRepoAnalysisId(landscape: Landscape, repoId: string): string {
+function getRepoAnalysisId(landscape: Landscape, repoId: string): string {
   return (
     landscape.stats?.members?.find((m) => m.repo_id === repoId)?.analysis_id ||
     landscape.repos?.find((r) => r.repo_id === repoId)?.pinned_analysis_id ||
@@ -727,6 +728,7 @@ function InterfacesTab({ landscape }: { landscape: Landscape }) {
   const [q, setQ] = useState("");
   const [error, setError] = useState("");
   const [code, setCode] = useState<{ analysisId: string; path: string; line: number; title: string } | null>(null);
+  const [externalSpec, setExternalSpec] = useState<string | null>(null);
   useEffect(() => {
     api<{ provided: ProvidedInterface[]; external: ExternalSystem[] }>(`/api/landscapes/${landscape.landscape_id}/interfaces`).then(setData).catch((err) => setError(errorText(err)));
   }, [landscape]);
@@ -768,7 +770,7 @@ function InterfacesTab({ landscape }: { landscape: Landscape }) {
       <section className="panel">
         <div className="panel-head"><span>External systems · {data.external.length}</span></div>
         <table className="w-full">
-          <thead className="table-head"><tr><th>System</th><th>Type</th><th>Used by</th><th className="text-right">References</th></tr></thead>
+          <thead className="table-head"><tr><th>System</th><th>Type</th><th>Used by</th><th className="text-right">References</th><th /></tr></thead>
           <tbody>
             {data.external.map((e) => (
               <tr key={`${e.type}:${e.name}`} className="table-row">
@@ -776,12 +778,20 @@ function InterfacesTab({ landscape }: { landscape: Landscape }) {
                 <td className="text-body-sm text-muted">{e.type}</td>
                 <td className="text-body-sm">{[...new Set(e.users.map((u) => u.repo_name))].join(", ")}</td>
                 <td className="text-right font-mono tnum">{e.users.length}</td>
+                <td className="text-right">
+                  {e.users.some((u) => u.kind === "http") && (
+                    <button type="button" className="btn h-6" title="OpenAPI drafted from the calls made to this API" onClick={() => setExternalSpec(e.name)}>
+                      <span className="material-symbols-outlined icon-sm">api</span>OpenAPI
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
       {code && code.analysisId && <CodeModal {...code} onClose={() => setCode(null)} />}
+      {externalSpec && <ExternalSpecModal landscapeId={landscape.landscape_id} name={externalSpec} onClose={() => setExternalSpec(null)} />}
     </div>
   );
 }

@@ -83,6 +83,12 @@ def run_report_pdf(run_id: str, user: dict = Depends(current_user)):
     )
 
 
+@router.get("/impact-runs/{run_id}/openapi-diff")
+def run_openapi_diff(run_id: str, user: dict = Depends(current_user)):
+    """API contract changes of the pull request: OpenAPI generated at the merge-base vs at the head."""
+    return pr_impact.openapi_diff(user, run_id)
+
+
 @router.get("/impact-runs/{run_id}/events")
 def events(run_id: str, after: str = "", user: dict = Depends(current_user)):
     return pr_impact.events(user, run_id, after)

@@ -62,7 +62,7 @@ _INSIGHTS_READ_ONLY = {"chat"}  # chatting is a read of the stored analysis
 _INSIGHTS = {"comparisons", "landscapes"}
 _SETTINGS = {"settings", "users", "roles", "audit", "database"}
 # Changing requests that only read: checking access to a remote repository.
-_READ_POSTS = {"git/check", "git/branches"}
+_READ_POSTS = {"git/check", "git/branches", "repositories/check-exists"}
 
 
 def rule_for(method: str, path: str) -> list[list[tuple[str, str]]]:

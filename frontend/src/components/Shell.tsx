@@ -136,7 +136,6 @@ export function Shell() {
         <nav className="flex w-[60px] shrink-0 flex-col border-r border-line bg-surface py-1" aria-label="Primary">
           <RailLink to="/" icon="monitoring" label="Pulse" end />
           {can(user, "repositories") && <RailLink to="/repositories" icon="folder_data" label="Repos" />}
-          {can(user, "repositories") && <RailLink to="/analyses" icon="query_stats" label="Runs" />}
           {can(user, "insights") && can(user, "repositories") && <RailLink to="/compare" icon="compare_arrows" label="Compare" />}
           {can(user, "repositories") && <RailLink to="/impact" icon="difference" label="Impact" />}
           {can(user, "insights") && can(user, "repositories") && <RailLink to="/landscapes" icon="hub" label="Systems" />}

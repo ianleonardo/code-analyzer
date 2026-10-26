@@ -11,6 +11,11 @@ def list_repositories(user: dict = Depends(current_user)):
     return repositories.list_repositories(user)
 
 
+@router.post("/check-exists")
+def check_exists(body: dict, user: dict = Depends(current_user)):
+    return repositories.check_existing(user, body)
+
+
 @router.post("")
 def create_repository(body: dict, user: dict = Depends(current_user)):
     if body.get("source_type") == "local":

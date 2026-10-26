@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse, Response
 
 from app.deps import current_user
-from app.services import compare
+from app.services import compare, openapi
 
 router = APIRouter(prefix="/comparisons", tags=["comparisons"])
 
@@ -58,3 +58,10 @@ def narrative(comparison_id: str, user: dict = Depends(current_user)):
 @router.delete("/{comparison_id}", status_code=204)
 def delete_comparison(comparison_id: str, user: dict = Depends(current_user)):
     compare.delete_comparison(user, comparison_id)
+
+
+@router.get("/{comparison_id}/openapi-diff")
+def openapi_diff(comparison_id: str, user: dict = Depends(current_user)):
+    """Breaking-change check between the OpenAPI specs generated from the two compared analyses."""
+    comparison = compare.get_comparison(user, comparison_id)
+    return openapi.compare_analyses(comparison["left_analysis_id"], comparison["right_analysis_id"])

@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { api, del, downloadFile, errorText, formatDateTime, post } from "../api";
 import { useAuth } from "../auth";
 import { ChatPanel } from "../components/ChatPanel";
+import { OpenApiDiffPanel } from "../components/openapi/Panels";
 import { RepoPicker } from "../components/RepoPicker";
 import { DateRangeFilter, type Page, Pagination, PurgeDialog, dayToIso, useDebounced } from "../components/ListTools";
 import { ConfirmDialog, Empty, ErrorNote, HealthGauge, Markdown, PageHeader, Select, SeverityBadge, ShortSha, Spinner } from "../components/ui";
@@ -390,7 +391,12 @@ export function ComparisonPage() {
                 </div>
               </>
             )}
-            {tab === "contracts" && <ContractChanges catalog={r.catalog} />}
+            {tab === "contracts" && (
+              <div className="space-y-4">
+                <OpenApiDiffPanel url={`/api/comparisons/${comparisonId}/openapi-diff`} />
+                <ContractChanges catalog={r.catalog} />
+              </div>
+            )}
             {tab === "files" && (
               <>
                 <div className="grid grid-cols-4 gap-2">

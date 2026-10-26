@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse, Response
 
 from app.deps import current_user
-from app.services import analyses, catalog, repositories, retrieval
+from app.services import analyses, catalog, openapi, repositories, retrieval
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 
@@ -155,3 +155,40 @@ def catalog_markdown(analysis_id: str, user: dict = Depends(current_user)):
 def catalog_excel(analysis_id: str, user: dict = Depends(current_user)):
     return Response(catalog.export_xlsx(user, analysis_id), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="layer-catalogue-{analysis_id[:8]}.xlsx"'})
+
+
+# --- OpenAPI ---------------------------------------------------------------------------------------------------------
+
+
+def _openapi_options(version: str, format: str, service: str, tag_by: str, include_internal: bool, extensions: bool, keys: str, enrich: bool) -> dict:
+    return {"version": version, "format": format, "service": service, "tag_by": tag_by, "include_internal": include_internal, "extensions": extensions,
+            "keys": keys, "enrich": enrich}
+
+
+@router.get("/{analysis_id}/openapi")
+def openapi_overview(analysis_id: str, user: dict = Depends(current_user)):
+    return openapi.overview(user, analysis_id)
+
+
+@router.get("/{analysis_id}/openapi/spec")
+def openapi_spec(analysis_id: str, version: str = "3.0.3", format: str = "yaml", service: str = "", tag_by: str = "controller", include_internal: bool = False,
+                 extensions: bool = True, keys: str = "", enrich: bool = False, user: dict = Depends(current_user)):
+    return openapi.generate(user, analysis_id, _openapi_options(version, format, service, tag_by, include_internal, extensions, keys, enrich))
+
+
+@router.get("/{analysis_id}/openapi/download")
+def openapi_download(analysis_id: str, version: str = "3.0.3", format: str = "yaml", service: str = "", tag_by: str = "controller", include_internal: bool = False,
+                     extensions: bool = True, keys: str = "", enrich: bool = False, user: dict = Depends(current_user)):
+    content, name, media = openapi.download(user, analysis_id, _openapi_options(version, format, service, tag_by, include_internal, extensions, keys, enrich))
+    return Response(content, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/{analysis_id}/openapi/drift")
+def openapi_drift(analysis_id: str, spec_path: str = "", service: str = "", user: dict = Depends(current_user)):
+    return openapi.drift(user, analysis_id, spec_path, service)
+
+
+@router.get("/{analysis_id}/openapi/diff/{other_id}")
+def openapi_diff(analysis_id: str, other_id: str, user: dict = Depends(current_user)):
+    """Breaking-change check from this analysis (before) to the other (after)."""
+    return openapi.compare_user(user, analysis_id, other_id)

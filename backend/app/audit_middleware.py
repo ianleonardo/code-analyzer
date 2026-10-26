@@ -11,7 +11,7 @@ from app.services import audit
 
 CHANGING = {"POST", "PUT", "PATCH", "DELETE"}
 # Changing requests that change nothing worth tracing.
-IGNORED_SUFFIXES = ("/auth/login", "/git/check", "/git/branches", "/messages")
+IGNORED_SUFFIXES = ("/auth/login", "/git/check", "/git/branches", "/messages", "/repositories/check-exists")
 BODY_LIMIT = 64_000
 
 

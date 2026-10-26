@@ -7,14 +7,18 @@ import { HealthGauge, PageHeader, ShortSha, SourceBadge, StatusBadge, healthColo
 import { can } from "../permissions";
 import type { Dashboard } from "../types";
 
-function Kpi({ label, value, hint, accent = "text-ink" }: { label: string; value: string; hint?: string; accent?: string }) {
-  return (
-    <div className="card">
+function Kpi({ label, value, hint, accent = "text-ink", to }: { label: string; value: string; hint?: string; accent?: string; to?: string }) {
+  const content = (
+    <div className={`card ${to ? "hover:border-primary/50 transition-colors" : ""}`}>
       <div className="label-micro">{label}</div>
       <div className={`kpi mt-1 ${accent}`}>{value}</div>
       {hint && <div className="font-mono text-micro text-faint">{hint}</div>}
     </div>
   );
+  if (to) {
+    return <Link to={to} className="block">{content}</Link>;
+  }
+  return content;
 }
 
 export function DashboardPage() {
@@ -39,6 +43,9 @@ export function DashboardPage() {
         subtitle="Repositories, analysis runs and codebase health across the workspace."
         right={
           <>
+            <Link className="btn" to="/analyses">
+              <span className="material-symbols-outlined icon-sm">query_stats</span>All runs
+            </Link>
             {can(user, "insights") && <Link className="btn" to="/compare"><span className="material-symbols-outlined icon-sm">compare_arrows</span>Compare</Link>}
             {canWrite && (
               <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
@@ -51,8 +58,18 @@ export function DashboardPage() {
       <div className="space-y-4 p-4">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <Kpi label="Repositories" value={String(data?.repositories ?? "—")} />
-          <Kpi label="Completed runs" value={String(analyses.completed ?? 0)} hint={`${analyses.failed ?? 0} failed · ${analyses.cancelled ?? 0} cancelled`} />
-          <Kpi label="Active runs" value={String((analyses.running ?? 0) + (analyses.queued ?? 0))} accent={(analyses.running ?? 0) ? "text-primary" : "text-ink"} />
+          <Kpi
+            label="Completed runs"
+            value={String(analyses.completed ?? 0)}
+            hint={`${analyses.failed ?? 0} failed · ${analyses.cancelled ?? 0} cancelled`}
+            to="/analyses"
+          />
+          <Kpi
+            label="Active runs"
+            value={String((analyses.running ?? 0) + (analyses.queued ?? 0))}
+            accent={(analyses.running ?? 0) ? "text-primary" : "text-ink"}
+            to="/analyses"
+          />
           <Kpi label="Lines analysed" value={compact(data?.total_loc ?? 0)} />
           <Kpi label="Avg health" value={data?.avg_health !== null && data?.avg_health !== undefined ? data.avg_health.toFixed(1) : "—"} accent={healthColor(data?.avg_health)} hint="/ 100" />
           <Kpi label="Comparisons · chats" value={`${data?.comparisons ?? 0} · ${data?.chats ?? 0}`} />
@@ -61,7 +78,9 @@ export function DashboardPage() {
         <section className="panel">
           <div className="panel-head">
             <span>Recent analysis runs</span>
-            <Link to="/analyses" className="link normal-case">All runs</Link>
+            <Link to="/analyses" className="btn h-6 px-2 text-micro">
+              All runs →
+            </Link>
           </div>
           <table className="w-full">
             <thead className="table-head">

@@ -100,6 +100,19 @@ and **Light Laboratory** modes.
   provided interfaces with their consumers, end-to-end **journeys** as sequence diagrams (screen → API → service →
   topic → consumer → table), all links; export to Markdown, PDF and Excel. PR impact lists the **consumers in other
   repositories** of the affected endpoints and topics.
+- **API Spec (OpenAPI)** (analysis › API Spec) — generated from the layer catalogue for every service with REST endpoints
+  (Spring, Express, NestJS, FastAPI, Next.js API routes; server-rendered pages excluded): info and version from the
+  manifest, servers per profile (port, context path), operations with operationId, summary and business rules, typed
+  parameters with validation constraints (`minLength`, `pattern`, `minimum`, `format: email`, …), request / response
+  DTOs as component schemas (nested types, lists, maps, enums, Spring pages), error responses from exceptions mapped to a
+  status, security schemes and roles (`x-roles`), tags by controller / feature / path, `x-source` links to the code.
+  Anything untyped is marked `x-inferred` and lowers the operation's completeness score; the document is checked
+  against the core OpenAPI rules. OpenAPI **3.0.3** (default) or **3.1**, YAML or JSON; built-in preview (operations
+  tree, docs, source, warnings); download one service, the selected operations, or every service as a zip. Optional
+  LLM pass adds summaries, descriptions and examples (cached; examples must match the schema; structure unchanged).
+  Contract-first repositories get a **drift report** (committed spec vs code, Swagger 2.0 converted); Compare and PR
+  impact show **breaking API changes** between the generated specs; a landscape drafts an **"as used" spec** for each
+  external API from the calls made to it.
 - **Admin** (as in SpecForge) — LLM (Gemini, Spirare; encrypted write-only keys; active provider; test connection),
   Users (local or Active Directory), User Roles (none/read/write on *Repositories*, *Insights*, *Settings*), Database,
   Audit Log.

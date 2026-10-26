@@ -773,7 +773,19 @@ SCHEMA_V6 = [
     "CREATE INDEX IF NOT EXISTS ix_landscape_repos_repo ON landscape_repos (repo_id)",
 ]
 
-MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6]
+# v7: cache of LLM descriptions / examples added to generated OpenAPI operations (keyed by the operation's content)
+SCHEMA_V7 = [
+    """
+    CREATE TABLE IF NOT EXISTS openapi_enrichment (
+        cache_key VARCHAR(64) PRIMARY KEY,
+        repo_id VARCHAR(64) NOT NULL DEFAULT '',
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP NOT NULL
+    )
+    """,
+]
+
+MIGRATIONS: list[list[str]] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5, SCHEMA_V6, SCHEMA_V7]
 
 TABLES = (
     "roles",
@@ -809,6 +821,7 @@ TABLES = (
     "landscape_repos",
     "landscape_links",
     "landscape_decisions",
+    "openapi_enrichment",
 )
 
 # Child tables of one PR impact run, deleted together with it.

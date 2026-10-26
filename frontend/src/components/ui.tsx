@@ -1,4 +1,4 @@
-import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Children, Component, isValidElement, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { renderMarkdown } from "../markdown";
 import type { Layer } from "../types";
@@ -924,3 +924,68 @@ export function Select({
     </>
   );
 }
+
+export interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode | ((error: Error, reset: () => void) => ReactNode);
+  name?: string;
+  onReset?: () => void;
+}
+
+export interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error(`[ErrorBoundary${this.props.name ? `:${this.props.name}` : ""}] caught render error:`, error, errorInfo);
+  }
+
+  reset = () => {
+    this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
+  };
+
+  render() {
+    if (this.state.hasError) {
+      if (typeof this.props.fallback === "function") {
+        return this.props.fallback(this.state.error || new Error("Unknown error"), this.reset);
+      }
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+      return (
+        <div className="rounded border border-critical/40 bg-critical/10 p-4 text-ink">
+          <div className="flex items-center gap-2 text-critical font-medium">
+            <span className="material-symbols-outlined icon-md">error</span>
+            <span>Failed to render {this.props.name || "content"}</span>
+          </div>
+          <div className="mt-2 font-mono text-micro text-critical/90 whitespace-pre-wrap break-all">
+            {this.state.error?.message || "An unexpected error occurred while rendering this component."}
+          </div>
+          <div className="mt-3">
+            <button
+              type="button"
+              className="btn btn-secondary h-7 text-micro"
+              onClick={this.reset}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
