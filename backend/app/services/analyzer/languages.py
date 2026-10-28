@@ -21,13 +21,19 @@ EXTENSIONS: dict[str, tuple[str, str]] = {
     ".ex": ("Elixir", "code"), ".exs": ("Elixir", "code"), ".erl": ("Erlang", "code"),
     ".clj": ("Clojure", "code"), ".hs": ("Haskell", "code"), ".lua": ("Lua", "code"),
     ".pl": ("Perl", "code"), ".pm": ("Perl", "code"), ".r": ("R", "code"), ".jl": ("Julia", "code"),
-    ".sql": ("SQL", "code"), ".pls": ("PL/SQL", "code"), ".pks": ("PL/SQL", "code"), ".pkb": ("PL/SQL", "code"),
+    ".sql": ("SQL", "code"), ".ddl": ("SQL", "code"), ".pls": ("PL/SQL", "code"), ".pks": ("PL/SQL", "code"), ".pkb": ("PL/SQL", "code"),
     ".sh": ("Shell", "script"), ".bash": ("Shell", "script"), ".zsh": ("Shell", "script"),
     ".ps1": ("PowerShell", "script"), ".bat": ("Batch", "script"), ".cmd": ("Batch", "script"),
-    ".cbl": ("COBOL", "code"), ".cob": ("COBOL", "code"), ".cpy": ("COBOL Copybook", "code"),
-    ".rpg": ("RPG", "code"), ".rpgle": ("RPG", "code"), ".sqlrpgle": ("RPG", "code"), ".rpglec": ("RPG", "code"),
-    ".clle": ("CL", "code"), ".clp": ("CL", "code"), ".dspf": ("DDS", "code"), ".pf": ("DDS", "code"), ".lf": ("DDS", "code"),
-    ".jcl": ("JCL", "script"),
+    ".cbl": ("COBOL", "code"), ".cob": ("COBOL", "code"), ".cobol": ("COBOL", "code"), ".cblle": ("COBOL", "code"),
+    ".sqlcblle": ("COBOL", "code"), ".sqlcbl": ("COBOL", "code"), ".pco": ("COBOL", "code"), ".ccp": ("COBOL", "code"),
+    ".cpy": ("COBOL Copybook", "code"), ".copy": ("COBOL Copybook", "code"), ".cpybk": ("COBOL Copybook", "code"),
+    ".dcl": ("COBOL Copybook", "code"), ".dclgen": ("COBOL Copybook", "code"),
+    ".rpg": ("RPG", "code"), ".rpgle": ("RPG", "code"), ".sqlrpgle": ("RPG", "code"), ".rpglec": ("RPG", "code"), ".sqlrpg": ("RPG", "code"),
+    ".rpg38": ("RPG", "code"), ".rpgleinc": ("RPG", "code"), ".rpginc": ("RPG", "code"),
+    ".clle": ("CL", "code"), ".clp": ("CL", "code"), ".cl38": ("CL", "code"),
+    ".dspf": ("DDS", "code"), ".pf": ("DDS", "code"), ".lf": ("DDS", "code"), ".prtf": ("DDS", "code"), ".dds": ("DDS", "code"),
+    ".jcl": ("JCL", "script"), ".prc": ("JCL", "script"), ".jclproc": ("JCL", "script"),
+    ".bms": ("BMS", "markup"), ".csd": ("CICS CSD", "config"),
     ".jsp": ("JSP", "markup"), ".jspx": ("JSP", "markup"), ".cshtml": ("Razor", "markup"), ".razor": ("Razor", "markup"), ".xaml": ("XAML", "markup"),
     ".html": ("HTML", "markup"), ".htm": ("HTML", "markup"), ".hbs": ("Handlebars", "markup"), ".ejs": ("EJS", "markup"),
     ".ftl": ("FreeMarker", "markup"), ".ftlh": ("FreeMarker", "markup"), ".mustache": ("Mustache", "markup"),
@@ -101,6 +107,7 @@ COMMENTS: dict[str, tuple[tuple[str, ...], tuple[str, str] | None]] = {
     "HTML": ((), ("<!--", "-->")), "XML": ((), ("<!--", "-->")), "Vue": (("//",), ("<!--", "-->")),
     "CSS": ((), ("/*", "*/")), "SCSS": (("//",), ("/*", "*/")), "Less": (("//",), ("/*", "*/")),
     "COBOL": (("*>",), None), "COBOL Copybook": (("*>",), None), "RPG": (("//",), None), "CL": ((), ("/*", "*/")),
+    "JCL": (("//*",), None), "DDS": ((), None), "BMS": (("*",), None), "CICS CSD": (("*",), None),
 }
 DEFAULT_COMMENTS = _C_STYLE
 
@@ -123,6 +130,23 @@ def classify_path(path: str) -> tuple[str, str]:
     return ("", "other")
 
 
+# Source-member exports from mainframe / IBM i libraries often carry no extension (or .mbr / .txt / .src).
+SNIFF_SUFFIXES = ("", ".mbr", ".src", ".txt", ".mem")
+
+
+def sniff_language(path: str, text: str) -> tuple[str, str]:
+    """(language, category) from content for extension-less legacy members; ('', '') when nothing matches."""
+    from app.services.analyzer import legacy
+
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix not in SNIFF_SUFFIXES or not text:
+        return "", ""
+    language = legacy.sniff(path if suffix in ("", ".mbr", ".src", ".mem") else "", text)
+    if not language:
+        return "", ""
+    return language, EXTENSIONS.get({"COBOL": ".cbl", "COBOL Copybook": ".cpy", "RPG": ".rpgle", "CL": ".clle", "DDS": ".dds", "JCL": ".jcl", "BMS": ".bms"}[language], ("", "code"))[1]
+
+
 def is_minified(name: str) -> bool:
     lowered = name.lower()
     return lowered.endswith((".min.js", ".min.css", ".map", ".bundle.js", ".chunk.js")) or "-bundle." in lowered
@@ -133,13 +157,13 @@ def count_lines(text: str, language: str) -> tuple[int, int, int]:
     line_prefixes, block = COMMENTS.get(language, DEFAULT_COMMENTS)
     code = comment = blank = 0
     in_block = False
-    fixed_cobol = language in ("COBOL", "COBOL Copybook")
+    fixed_column7 = language in ("COBOL", "COBOL Copybook", "RPG", "DDS")
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             blank += 1
             continue
-        if fixed_cobol and len(raw) > 6 and raw[6:7] in ("*", "/"):
+        if fixed_column7 and len(raw) > 6 and raw[6:7] in ("*", "/") and not raw[:6].strip(" 0123456789HFDICOPAhfdicopa"):
             comment += 1
             continue
         if in_block:

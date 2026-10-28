@@ -275,8 +275,10 @@ def walk(root: Path, cancelled=lambda: False, progress=lambda done: None) -> Wor
                 or GENERATED_NAME.search(name) is not None
                 or any(marker in head for marker in GENERATED_MARKERS)
             )
-            if category == "other" and not language:
-                category = "other"
+            if suffix in languages.SNIFF_SUFFIXES and (not language or category == "doc"):
+                sniffed, sniffed_category = languages.sniff_language(rel, text)
+                if sniffed:
+                    language, category = sniffed, sniffed_category
             workspace.files.append(FileEntry(rel, size, digest, language or "Other", category, text, generated))
         progress(len(workspace.files))
     workspace.skipped = skipped

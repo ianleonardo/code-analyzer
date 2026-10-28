@@ -9,10 +9,12 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 
+from app.services.analyzer.legacy import is_system_program
 from app.services.analyzer.parsers import ImportRef, ParseResult
 
 JS_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".d.ts", ".mts", ".cts")
 JVM_EXTS = (".java", ".kt", ".kts", ".scala", ".groovy")
+LEGACY_LANGUAGES = ("COBOL", "COBOL Copybook", "RPG", "CL", "JCL", "DDS", "BMS")
 
 
 @dataclass
@@ -165,15 +167,27 @@ class Resolver:
             if not hit:
                 hit = self._suffix_match(source, PurePosixPath(module).with_suffix("").parts, (".h", ".hpp", ".hh", ".c", ".cpp", ".cc"))
             return [hit] if hit else []
-        if language in ("COBOL", "COBOL Copybook", "RPG", "CL"):
-            if ref.kind == "call":
-                target = self.program_index.get(module.upper())
-                if not target:
-                    target = self._closest(source, self.by_name.get(module.lower(), []))
-                return [target] if target else []
-            hit = self._closest(source, self.by_name.get(module.lower(), []))
-            return [hit] if hit else []
+        if language in LEGACY_LANGUAGES:
+            return self._legacy(source, language, ref)
         return []
+
+    def _legacy(self, source: str, language: str, ref: ImportRef) -> list[str]:
+        """Members resolve by name: CALL / EXEC PGM -> program (PROGRAM-ID or member), COPY -> copybook, PFILE / REF -> DDS."""
+        module = ref.module
+        candidates = [path for path in self.by_name.get(module.lower(), []) if path != source]
+        if ref.kind == "call":
+            target = self.program_index.get(module.upper())
+            if target and target != source:
+                return [target]
+            wanted = ("JCL",) if language == "JCL" and not [p for p in candidates if self.languages.get(p) in ("COBOL", "RPG", "CL")] else ("COBOL", "RPG", "CL")
+            preferred = [p for p in candidates if self.languages.get(p) in wanted] or [p for p in candidates if self.languages.get(p) in LEGACY_LANGUAGES]
+        elif ref.kind == "copy":
+            family = {"RPG": ("RPG",), "CL": ("CL", "RPG", "SQL"), "JCL": ("JCL",)}.get(language, ("COBOL Copybook", "COBOL"))
+            preferred = [p for p in candidates if self.languages.get(p) in family]
+        else:
+            preferred = [p for p in candidates if self.languages.get(p) == "DDS"] if language == "DDS" else candidates
+        hit = self._closest(source, preferred)
+        return [hit] if hit else []
 
     def _python(self, source: str, directory: str, ref: ImportRef) -> list[str]:
         exts = (".py", ".pyi")
@@ -413,6 +427,8 @@ _STDLIB_HINT = re.compile(r"^(java|javax|jakarta|kotlin|scala|System|Microsoft|o
 
 def _looks_external(ref: ImportRef, language: str) -> bool:
     module = ref.module
+    if language in LEGACY_LANGUAGES:
+        return ref.kind == "call" and is_system_program(module) or ref.kind == "copy" and module.upper() in ("SQLCA", "SQLDA", "DFHAID", "DFHBMSCA", "DFHEIBLK")
     if language in ("JavaScript", "TypeScript", "Vue", "Svelte"):
         return not module.startswith((".", "/", "@/", "~/"))
     if language == "Python":

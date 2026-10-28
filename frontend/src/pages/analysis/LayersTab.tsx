@@ -11,24 +11,28 @@ import { KIND_ICON, type CatalogRow, type CatalogSummary, type Crud } from "./la
 
 const LAYER_ORDER = ["api", "service", "data", "ui", "shared"] as const;
 const LAYER_HINT: Record<string, string> = {
-  api: "Endpoints with request / response structure, validation, security and status codes",
-  service: "Services, business rules, transactions, scheduled jobs and event listeners",
-  data: "Database technology, tables (DDL + ORM), repositories, queries, procedures, CRUD and ERD",
-  ui: "Screens with fields, actions, navigation and the backend calls they make",
-  shared: "DTOs, enums, exceptions, configuration keys, security, integrations and utilities",
+  api: "Endpoints with request / response structure, validation, security and status codes; CICS transactions",
+  service: "Services, business rules, transactions, scheduled jobs and event listeners; COBOL / RPG / CL programs and JCL jobs",
+  data: "Database technology, tables (DDL + ORM + DDS / DCLGEN), repositories, queries, procedures, files and datasets, CRUD and ERD",
+  ui: "Screens with fields, actions, navigation and the backend calls they make, including 3270 BMS maps and 5250 display files",
+  shared: "DTOs, enums, exceptions, configuration keys, security, integrations, utilities and copybooks",
 };
 
 function Badge({ row }: { row: CatalogRow }) {
   const b = row.badge ?? {};
   if (row.kind === "endpoint") return <span className="flex items-center gap-1">{b.secured && <span className="material-symbols-outlined icon-sm text-warning" title="Secured">lock</span>}{b.rules ? <span className="chip border-c-validation/40 text-ink">{b.rules} {b.rules === 1 ? "rule" : "rules"}</span> : null}</span>;
   if (row.kind === "table") return <span className="font-mono text-micro text-faint">{b.columns} cols{b.crud ? ` · ${b.crud}` : ""}</span>;
-  if (row.kind === "screen") return <span className="font-mono text-micro text-faint">{b.fields} fields · {b.calls} calls</span>;
+  if (row.kind === "screen") return <span className="font-mono text-micro text-faint">{b.fields} fields{b.platform === "CICS BMS" || b.platform === "IBM i 5250" ? ` · ${b.platform === "CICS BMS" ? "3270" : "5250"}` : ` · ${b.calls} calls`}</span>;
   if (row.kind === "query") return <span className="font-mono text-micro text-faint">{b.operation} {b.dialect}</span>;
   if (row.kind === "job") return <span className="truncate font-mono text-micro text-faint">{b.schedule}</span>;
   if (row.kind === "listener") return <span className="truncate font-mono text-micro text-faint">{b.transport}{b.destination ? ` · ${b.destination}` : ""}</span>;
   if (row.kind === "topic") return <span className="chip border-line-strong text-muted">{b.transport || "event"}</span>;
   if (row.kind === "config") return <span className="font-mono text-micro text-faint">{b.secret ? "secret · " : ""}{b.used ? `${b.used} uses` : b.category}</span>;
   if (["service", "view_model", "repository"].includes(row.kind)) return <span className="font-mono text-micro text-faint">{b.methods} methods</span>;
+  if (row.kind === "program") return <span className="truncate font-mono text-micro text-faint">{b.role}{b.units ? ` · ${b.units} units` : ""}</span>;
+  if (row.kind === "transaction") return <span className="truncate font-mono text-micro text-faint">{b.program ? `→ ${b.program}` : ""}</span>;
+  if (row.kind === "file") return <span className="truncate font-mono text-micro text-faint">{b.organization}{b.accessors ? ` · ${b.accessors} users` : ""}</span>;
+  if (row.kind === "copybook") return <span className="font-mono text-micro text-faint">{b.fields ? `${b.fields} fields` : ""}{b.dclgen ? " · DCLGEN" : ""}</span>;
   if (["api_client", "integration"].includes(row.kind)) return b.matched ? <span className="material-symbols-outlined icon-sm text-ok" title="Matched to a backend endpoint">link</span> : null;
   return null;
 }
@@ -60,7 +64,7 @@ function CrudView({ analysisId, onSelect }: { analysisId: string; onSelect: (id:
           ))}
         </tbody>
       </table>
-      <p className="mt-2 font-mono text-micro text-faint">C create · R read · U update · D delete — derived from repository / query usage, SQL statements and Spring Data method names.</p>
+      <p className="mt-2 font-mono text-micro text-faint">C create · R read · U update · D delete — derived from repository / query usage, SQL statements (incl. embedded SQL), Spring Data method names and COBOL / RPG / CICS / JCL file I/O.</p>
     </div>
   );
 }

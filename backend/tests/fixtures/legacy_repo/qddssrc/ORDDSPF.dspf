@@ -1,0 +1,10 @@
+     A                                      DSPSIZ(24 80 *DS3)
+     A                                      CA03(03 'Exit')
+     A          R ORDSFL                    SFL
+     A            ITEM          15A  B  8  2
+     A          R ORDCTL                    SFLCTL(ORDSFL)
+     A                                      CF05(05 'Price')
+     A                                  1 30'Order Entry'
+     A                                  3  2'Order:'
+     A            ORDNO         10A  I  3 10CHECK(ME)
+     A            ORDTOT         9Y 2O  4 10

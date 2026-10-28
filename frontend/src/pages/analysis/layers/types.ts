@@ -39,6 +39,7 @@ export const KIND_ICON: Record<string, string> = {
   repository: "inventory", query: "manage_search", procedure: "function", trigger: "bolt", screen: "web", component: "widgets", view_model: "dynamic_feed",
   api_client: "cloud_sync", dto: "data_object", enum: "list", exception: "error", config: "tune", config_class: "settings", security: "shield",
   integration: "conversion_path", constants: "pin", utility: "build", bean_config: "deployed_code", manifest: "android", topic: "forum", mapper: "swap_horiz",
+  program: "memory", transaction: "confirmation_number", file: "description", copybook: "library_books",
 };
 
 export const METHOD_CLASS: Record<string, string> = {

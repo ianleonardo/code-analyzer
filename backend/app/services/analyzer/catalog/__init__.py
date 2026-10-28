@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.services.analyzer.catalog import android, camel, config, data, jvm, linker, mobile_http, python, swift, web
+from app.services.analyzer.catalog import android, camel, config, data, jvm, legacy, linker, mobile_http, python, swift, web
 from app.services.analyzer.catalog.model import Catalog, Context, Item, Link, SourceFile
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,16 @@ def build(files: list[SourceFile], dependencies: list[dict], edges: list[tuple[s
     _step("ios", swift.extract, ctx, cat, errors=errors)
     _step("http-calls", mobile_http.extract, ctx, cat, errors=errors)
     _step("web", web.extract, ctx, cat, errors=errors)
+    _step("legacy", legacy.extract, ctx, cat, errors=errors)
     _step("data", data.extract_late, ctx, cat, entries, state, errors=errors)
     _step("config-items", config.extract, ctx, cat, entries, errors=errors)
     _step("tables", data.finalize_tables, ctx, cat, errors=errors)
+    _step("legacy-links", legacy.link_tables, ctx, cat, errors=errors)
     _step("links", linker.link, ctx, cat, errors=errors)
     counts: dict[str, int] = {}
     for item in cat.items.values():
         counts[f"{item.layer}.{item.kind}"] = counts.get(f"{item.layer}.{item.kind}", 0) + 1
     cat.extra["stats"] = {"counts": counts, "items": len(cat.items), "links": len(cat.links), "seconds": round(time.time() - started, 2), "errors": errors,
-                          "android": ctx.android, "spring": ctx.spring, "version": 3}
+                          "android": ctx.android, "spring": ctx.spring, "legacy": cat.extra.pop("legacy", {}), "version": 3}
     log(f"Layer catalogue: {len(cat.items)} items, {len(cat.links)} links in {cat.extra['stats']['seconds']}s" + (f" ({len(errors)} extractor error(s))" if errors else ""))
     return cat
