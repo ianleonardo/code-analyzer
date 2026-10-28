@@ -177,10 +177,15 @@ ROLE_RULES: list[tuple[str, str, list[tuple[str, re.Pattern, int]]]] = [
         ("ext", re.compile(r"\.(tf|hcl)$", re.I), 8),
     ]),
     ("Documentation", "shared", [("ext", re.compile(r"\.(md|mdx|rst|adoc|txt)$", re.I), 9)]),
-    ("COBOL Program", "service", [("ext", re.compile(r"\.(cbl|cob)$", re.I), 8)]),
-    ("COBOL Copybook", "data", [("ext", re.compile(r"\.cpy$", re.I), 8)]),
-    ("RPG / CL Program", "service", [("ext", re.compile(r"\.(rpg|rpgle|sqlrpgle|clle|clp)$", re.I), 8)]),
-    ("DDS File Definition", "data", [("ext", re.compile(r"\.(pf|lf|dspf)$", re.I), 8)]),
+    ("COBOL Program", "service", [("ext", re.compile(r"\.(cbl|cob|cobol|cblle|sqlcblle|sqlcbl|pco|ccp)$", re.I), 8)]),
+    ("COBOL Copybook", "data", [("ext", re.compile(r"\.(cpy|copy|cpybk|dcl|dclgen)$", re.I), 8)]),
+    ("RPG Copy Member", "shared", [("ext", re.compile(r"\.(rpgleinc|rpginc)$", re.I), 9)]),
+    ("RPG / CL Program", "service", [("ext", re.compile(r"\.(rpg|rpgle|sqlrpgle|rpglec|sqlrpg|rpg38|clle|clp|cl38)$", re.I), 8)]),
+    ("DDS Display / Printer File", "ui", [("ext", re.compile(r"\.(dspf|prtf)$", re.I), 9)]),
+    ("DDS File Definition", "data", [("ext", re.compile(r"\.(pf|lf|dds)$", re.I), 8)]),
+    ("CICS BMS Map", "ui", [("ext", re.compile(r"\.bms$", re.I), 9)]),
+    ("CICS Resource Definitions", "shared", [("ext", re.compile(r"\.csd$", re.I), 9)]),
+    ("Batch Job (JCL)", "service", [("ext", re.compile(r"\.(jcl|prc|jclproc)$", re.I), 9)]),
     ("API Contract (Protobuf / GraphQL / OpenAPI)", "api", [
         ("ext", re.compile(r"\.(proto|graphql|gql)$", re.I), 8),
         ("name", re.compile(r"(openapi|swagger)\.(ya?ml|json)$", re.I), 8),
@@ -255,16 +260,40 @@ def classify(path: str, language: str, category: str, text: str, parsed: ParseRe
         evidence.append(f"{len(parsed.routes)} route declaration(s) → api")
 
     role, confidence, role_layer, role_evidence = _role(path, sample, category)
+    legacy_role = _legacy_role(language, parsed)
+    if legacy_role and (confidence < 0.5 or role in ("COBOL Program", "COBOL Copybook")):
+        role, role_layer = legacy_role
+        confidence = max(confidence, 0.8)
+        role_evidence = role_evidence + [f"{language} source → {role}"]
     evidence += role_evidence
     if role_layer and role not in ("Test", "Test Fixture / Mock", "Documentation", "Build / Tooling Script", "Configuration", "Infrastructure / Deployment"):
         scores[role_layer] += 2
     layer = max(scores, key=lambda key: (scores[key], key == "shared"))
     if scores[layer] <= 0:
         layer = role_layer or "shared"
+    if legacy_role and not is_test:
+        layer = role_layer  # a COBOL program with embedded SQL is business logic, not the data layer
     concepts = [] if category not in ("code", "script") else [name for name, pattern in CONCEPTS if pattern.search(sample)]
     if is_test:
         role = "Test" if role not in ("Test Fixture / Mock",) else role
     return Classification(layer, role, round(confidence, 2), concepts, evidence[:12], is_test)
+
+
+LEGACY_ROLES = {
+    "COBOL": ("COBOL Program", "service"), "COBOL Copybook": ("COBOL Copybook", "data"), "RPG": ("RPG / CL Program", "service"),
+    "CL": ("RPG / CL Program", "service"), "JCL": ("Batch Job (JCL)", "service"), "DDS": ("DDS File Definition", "data"),
+    "BMS": ("CICS BMS Map", "ui"), "CICS CSD": ("CICS Resource Definitions", "shared"),
+}
+
+
+def _legacy_role(language: str, parsed: ParseResult | None) -> tuple[str, str] | None:
+    if language not in LEGACY_ROLES:
+        return None
+    if language == "COBOL" and parsed is not None and not any(s.kind == "program" for s in parsed.symbols):
+        return ("COBOL Copybook", "data")
+    if language == "RPG" and parsed is not None and not parsed.has_main and not parsed.symbols:
+        return ("RPG Copy Member", "shared")
+    return LEGACY_ROLES[language]
 
 
 def _role(path: str, sample: str, category: str) -> tuple[str, float, str, list[str]]:

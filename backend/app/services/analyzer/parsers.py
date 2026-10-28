@@ -12,6 +12,8 @@ import ast
 import re
 from dataclasses import dataclass, field
 
+from app.services.analyzer import legacy
+
 KEYWORDS = {
     "if", "for", "while", "switch", "catch", "return", "function", "new", "else", "do", "try", "typeof", "sizeof",
     "await", "yield", "throw", "case", "delete", "void", "in", "of", "instanceof", "super", "this", "elif", "with",
@@ -671,66 +673,132 @@ def parse_sql(text: str) -> ParseResult:
     return result
 
 
-# COBOL / RPG / CL (IBM i, mainframe) ---------------------------------------------------------------------------------
+# COBOL / RPG / CL / JCL / DDS / BMS (mainframe and IBM i) ------------------------------------------------------------
+# The heavy lifting lives in legacy.py so the layer catalogue reads these sources the same way.
+
+
+def _legacy_tables(sql: list[dict]) -> set[str]:
+    return {name.split(".")[-1].upper() for entry in sql for name in entry.get("tables", {})}
 
 
 def parse_cobol(text: str) -> ParseResult:
+    data = legacy.parse_cobol(text)
     result = ParseResult()
-    lines = text.splitlines()
-    program = re.search(r"PROGRAM-ID\.\s*([\w-]+)", text, re.I)
-    current_section = ""
-    for index, raw in enumerate(lines):
-        line = raw[6:72] if len(raw) > 6 and raw[:6].strip().isdigit() or (len(raw) > 6 and raw[:6] == " " * 6) else raw
-        if len(raw) > 6 and raw[6:7] in ("*", "/"):
-            continue
-        match = re.match(r"^\s{0,4}([A-Z0-9][\w-]*)\s+SECTION\.", line, re.I)
-        if match:
-            current_section = match.group(1)
-            result.symbols.append(Symbol(match.group(1), "section", index + 1, index + 1, program.group(1) if program else "", 1, line.strip()[:200], True))
-            continue
-        match = re.match(r"^\s{0,4}([A-Z0-9][\w-]*)\.\s*$", line, re.I)
-        if match and match.group(1).upper() not in ("PROCEDURE", "DIVISION", "EXIT", "GOBACK"):
-            result.symbols.append(Symbol(match.group(1), "paragraph", index + 1, index + 1, current_section or (program.group(1) if program else ""), 1, line.strip()[:200], True))
-        for copy in re.findall(r"\bCOPY\s+([\w-]+)", line, re.I):
-            result.imports.append(ImportRef(copy, [], index + 1, 0, "copy"))
-        for call in re.findall(r"\bCALL\s+['\"]([\w-]+)['\"]", line, re.I):
-            result.imports.append(ImportRef(call, [], index + 1, 0, "call"))
-            result.calls[call] = result.calls.get(call, 0) + 1
-        for perform in re.findall(r"\bPERFORM\s+([\w-]+)", line, re.I):
-            result.calls[perform] = result.calls.get(perform, 0) + 1
-    # close paragraph ranges
-    ordered = sorted(result.symbols, key=lambda item: item.line_start)
-    for current, following in zip(ordered, ordered[1:] + [None], strict=False):
-        current.line_end = (following.line_start - 1) if following else len(lines)
-        current.complexity = 1 + len(re.findall(r"\b(IF|EVALUATE|WHEN|UNTIL|VARYING)\b", "\n".join(lines[current.line_start - 1 : current.line_end]), re.I))
-    if program:
-        result.symbols.insert(0, Symbol(program.group(1), "program", 1, len(lines), "", 1, f"PROGRAM-ID. {program.group(1)}", True))
-        result.namespace = program.group(1)
-    result.member_refs.update(re.findall(r"\b(?:FROM|INTO|UPDATE|JOIN)\s+([A-Z][\w]*)", text))
-    result.complexity = 1 + len(re.findall(r"\b(IF|EVALUATE|WHEN|UNTIL|VARYING)\b", text, re.I))
+    complexity = 0
+    for unit in data["units"]:
+        program = unit["name"] or ""
+        if program:
+            using = f" USING {' '.join(unit['using'])}" if unit["using"] else ""
+            result.symbols.append(Symbol(program, "program", unit["line"], unit["end"], "", unit["complexity"], f"PROGRAM-ID. {program}{using}", True))
+            result.namespace = result.namespace or program
+            if not unit["using"]:
+                result.has_main = True
+        for para in unit["paragraphs"]:
+            if para["kind"] == "section":
+                parent = program
+            else:
+                parent = ".".join(part for part in (program, para["section"]) if part)
+            signature = f"{para['name']}{' SECTION' if para['kind'] == 'section' else ''}."
+            result.symbols.append(Symbol(para["name"], para["kind"], para["line"], para["end"], parent, para["complexity"], signature, True))
+            for target in para["performs"] + para.get("go_to", []):
+                result.calls[target] = result.calls.get(target, 0) + 1
+        if not program and data["copybook"]:
+            for item in unit["data_items"]:
+                if item["level"] == 1:
+                    result.symbols.append(Symbol(item["name"], "record", item["line"], item["line"], "", 1, f"01 {item['name']}", True))
+        for copy in unit["copybooks"]:
+            result.imports.append(ImportRef(copy["name"], [], copy["line"], 0, "copy"))
+        for call in unit["calls"]:
+            if call["target"]:
+                result.imports.append(ImportRef(call["target"], [], call["line"], 0, "call"))
+                result.calls[call["target"]] = result.calls.get(call["target"], 0) + 1
+        result.member_refs.update(_legacy_tables(unit["sql"]))
+        complexity += unit["complexity"] - 1
+    result.member_refs.update(d["table"].split(".")[-1].upper() for d in data["dclgen"])
+    result.complexity = 1 + complexity
     return result
 
 
-def parse_rpg(text: str) -> ParseResult:
+def parse_rpg(text: str, path: str = "") -> ParseResult:
+    data = legacy.parse_rpg(text, path)
     result = ParseResult()
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        match = re.search(r"\bdcl-proc\s+(\w+)", line, re.I)
-        if match:
-            end = next((i for i in range(index, len(lines)) if re.search(r"\bend-proc\b", lines[i], re.I)), index)
-            body = "\n".join(lines[index : end + 1])
-            result.symbols.append(Symbol(match.group(1), "procedure", index + 1, end + 1, "", 1 + len(re.findall(r"\b(if|elseif|when|dow|dou|for)\b", body, re.I)), line.strip()[:200], bool(re.search(r"\bexport\b", line, re.I))))
-        match = re.search(r"\bbegsr\s+(\w+)", line, re.I)
-        if match:
-            end = next((i for i in range(index, len(lines)) if re.search(r"\bendsr\b", lines[i], re.I)), index)
-            result.symbols.append(Symbol(match.group(1), "subroutine", index + 1, end + 1, "", 1, line.strip()[:200], False))
-        for copy in re.findall(r"/(?:copy|include)\s+([\w/,.]+)", line, re.I):
-            result.imports.append(ImportRef(copy.split(",")[-1].split("/")[-1], [], index + 1, 0, "copy"))
-        for call in re.findall(r"\bCALLP?\s*\(?\s*['\"]?(\w+)", line, re.I):
-            result.calls[call] = result.calls.get(call, 0) + 1
-            result.imports.append(ImportRef(call, [], index + 1, 0, "call"))
-    result.member_refs.update(re.findall(r"\b(?:FROM|INTO|UPDATE|JOIN)\s+([A-Z][\w]*)", text, re.I))
-    result.complexity = 1 + len(re.findall(r"\b(if|elseif|when|dow|dou|for)\b", text, re.I))
+    for proc in data["procedures"]:
+        params = ", ".join(proc.get("params", []))
+        result.symbols.append(Symbol(proc["name"], "procedure", proc["line"], proc["end"], "", proc["complexity"], f"dcl-proc {proc['name']}({params})", proc["exported"]))
+    for sub in data["subroutines"]:
+        result.symbols.append(Symbol(sub["name"], "subroutine", sub["line"], sub["end"], "", sub["complexity"], f"BEGSR {sub['name']}", False))
+    for copy in data["copybooks"]:
+        result.imports.append(ImportRef(copy["name"], [], copy["line"], 0, "copy"))
+    for call in data["calls"]:
+        if call["target"]:
+            result.imports.append(ImportRef(call["target"], [], call["line"], 0, "call"))
+            result.calls[call["target"]] = result.calls.get(call["target"], 0) + 1
+    for target, _line in data.get("exsr", []):
+        result.calls[target] = result.calls.get(target, 0) + 1
+    for call in data.get("local_calls", []) + data.get("bound_calls", []):
+        result.calls[call["target"]] = result.calls.get(call["target"], 0) + 1
+    result.member_refs.update(_legacy_tables(data["sql"]))
+    result.has_main = not re.search(r"\bNOMAIN\b", text[:4000], re.I)
+    result.complexity = data["complexity"]
+    return result
+
+
+def parse_cl(text: str) -> ParseResult:
+    data = legacy.parse_cl(text)
+    result = ParseResult(has_main=True, complexity=data["complexity"])
+    for sub in data["subroutines"]:
+        result.symbols.append(Symbol(sub["name"], "subroutine", sub["line"], sub["end"], "", 1, f"SUBR {sub['name']}", False))
+    for call in data["calls"]:
+        if call["target"]:
+            result.imports.append(ImportRef(call["target"], [], call["line"], 0, "call"))
+            result.calls[call["target"]] = result.calls.get(call["target"], 0) + 1
+    for copy in data["copybooks"]:
+        if copy["name"]:
+            result.imports.append(ImportRef(copy["name"], [], copy["line"], 0, "copy"))
+    result.member_refs.update(_legacy_tables(data["sql"]))
+    return result
+
+
+def parse_jcl(text: str) -> ParseResult:
+    data = legacy.parse_jcl(text)
+    result = ParseResult(has_main=True)
+    for member in data["members"]:
+        name = member["name"]
+        if name:
+            result.symbols.append(Symbol(name, member["type"], member["line"], member["end"], "", 1 + len(member["steps"]), f"//{name} {member['type'].upper()}", True))
+        for index, step in enumerate(member["steps"]):
+            following = member["steps"][index + 1]["line"] - 1 if index + 1 < len(member["steps"]) else member["end"]
+            target = step["program"] or step["proc"]
+            result.symbols.append(Symbol(step["name"] or f"STEP{index + 1}", "step", step["line"], following, name, 1, f"//{step['name']} EXEC {'PGM=' + step['program'] if step['program'] else step['proc']}", True))
+            if target and not legacy.is_system_program(target):
+                result.imports.append(ImportRef(target, [], step["line"], 0, "call"))
+                result.calls[target] = result.calls.get(target, 0) + 1
+        for include in member["includes"]:
+            result.imports.append(ImportRef(include["name"], [], include["line"], 0, "copy"))
+    result.complexity = 1 + len(re.findall(r"^//\S*\s+IF\b|\bCOND=", text, re.M))
+    return result
+
+
+def parse_dds(text: str, path: str = "") -> ParseResult:
+    data = legacy.parse_dds(text, path)
+    result = ParseResult()
+    for fmt in data["formats"]:
+        end = max([fmt["line"]] + [f["line"] for f in fmt["fields"]])
+        result.symbols.append(Symbol(fmt["name"], "record", fmt["line"], end, "", 1, f"R {fmt['name']}" + (f" PFILE({' '.join(fmt['pfile'])})" if fmt["pfile"] else ""), True))
+        for based_on in fmt["pfile"]:
+            result.imports.append(ImportRef(based_on, [], fmt["line"], 0, "use"))
+    if data["ref"]:
+        result.imports.append(ImportRef(data["ref"], [], 1, 0, "use"))
+    return result
+
+
+def parse_bms(text: str) -> ParseResult:
+    data = legacy.parse_bms(text)
+    result = ParseResult()
+    for bms_map in data["maps"]:
+        end = max([bms_map["line"]] + [f["line"] for f in bms_map["fields"]])
+        result.symbols.append(Symbol(bms_map["name"], "map", bms_map["line"], end, data["mapset"], 1, f"{bms_map['name']} DFHMDI SIZE=({bms_map['size'][0]},{bms_map['size'][1]})", True))
+    result.namespace = data["mapset"]
     return result
 
 
@@ -769,7 +837,7 @@ def _vue_script(text: str) -> tuple[str, str]:
 BRACE_LANGUAGES = {"Java", "Kotlin", "C#", "Scala", "Groovy", "Swift", "Dart", "PHP", "C", "C++", "C/C++ Header", "Objective-C", "VB.NET", "F#"}
 
 
-def parse(text: str, language: str) -> ParseResult:
+def parse(text: str, language: str, path: str = "") -> ParseResult:
     if language == "Python":
         return parse_python(text)
     if language in ("JavaScript", "TypeScript"):
@@ -791,8 +859,16 @@ def parse(text: str, language: str) -> ParseResult:
         return parse_sql(text)
     if language in ("COBOL", "COBOL Copybook"):
         return parse_cobol(text)
-    if language in ("RPG", "CL"):
-        return parse_rpg(text)
+    if language == "RPG":
+        return parse_rpg(text, path)
+    if language == "CL":
+        return parse_cl(text)
+    if language == "JCL":
+        return parse_jcl(text)
+    if language == "DDS":
+        return parse_dds(text, path)
+    if language == "BMS":
+        return parse_bms(text)
     if language in ("Shell", "Perl", "Lua", "Elixir", "R", "PowerShell", "Groovy", "Julia"):
         return _parse_generic(text, language)
     return ParseResult(complexity=1)

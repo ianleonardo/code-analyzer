@@ -227,7 +227,7 @@ def _run_stages(run: Run, analysis: dict, repo: dict, scratch: Path, started: fl
         line_counts[item.path] = count_lines(item.text or "", item.language)
         if item.category in PARSED_CATEGORIES:
             try:
-                result = parsers.parse(item.text or "", item.language)
+                result = parsers.parse(item.text or "", item.language, item.path)
             except Exception:  # noqa: BLE001 - a parser bug must not stop the analysis
                 logger.exception("Parser failed for %s", item.path)
                 result = parsers.ParseResult(errors=1)

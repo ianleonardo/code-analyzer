@@ -1,0 +1,12 @@
+             PGM        PARM(&DATE)
+             DCL        VAR(&DATE) TYPE(*CHAR) LEN(8)
+             DCLF       FILE(*LIBL/ORDDSPF)
+             /* run pricing */
+             OVRDBF     FILE(ORDHDR) TOFILE(ARCHLIB/ORDHDR)
+             CALL       PGM(*LIBL/PRICECALC) PARM(&DATE)
+             MONMSG     MSGID(CPF0000) EXEC(GOTO CMDLBL(ERR))
+             SBMJOB     CMD(CALL PGM(ORDENT)) JOB(ORDBATCH)
+             CPYF       FROMFILE(ORDHDR) TOFILE(ORDHIST) +
+                          MBROPT(*ADD)
+             SNDRCVF    RCDFMT(ORDCTL)
+ ERR:        ENDPGM

@@ -1,0 +1,7 @@
+     A                                      UNIQUE
+     A          R ORDHDRR                   TEXT('Order header')
+     A            ORDNO         10A         TEXT('Order number')
+     A            ORDCUST       10A         COLHDG('Customer')
+     A            ORDTOT         9P 2       TEXT('Order total')
+     A            ORDDATE         L
+     A          K ORDNO

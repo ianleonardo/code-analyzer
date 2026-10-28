@@ -4,6 +4,7 @@ import { api, errorText } from "../../../api";
 import { Mermaid } from "../../../components/Mermaid";
 import { ErrorBoundary, ErrorNote, LayerPill, Spinner } from "../../../components/ui";
 import { ScreenWireframe } from "./ScreenWireframe";
+import { TerminalScreen, isTerminalScreen } from "./TerminalScreen";
 import { KIND_ICON, METHOD_CLASS, type CatalogItem, type Details, type LinkRef, type Trace } from "./types";
 
 type Nav = { onSelect: (itemId: string) => void; onOpenFile: (path: string, line?: number, end?: number) => void };
@@ -372,14 +373,18 @@ function ScreenBody({ analysisId, item, d, line }: { analysisId: string; item: C
 
       {activeTab === "wireframe" ? (
         <div className="space-y-4">
-          <ScreenWireframe
-            analysisId={analysisId}
-            itemId={item.item_id}
-            itemName={item.name}
-            itemPath={item.path}
-            d={d}
-            onLine={line}
-          />
+          {isTerminalScreen(d) ? (
+            <TerminalScreen d={d} onLine={line} />
+          ) : (
+            <ScreenWireframe
+              analysisId={analysisId}
+              itemId={item.item_id}
+              itemName={item.name}
+              itemPath={item.path}
+              d={d}
+              onLine={line}
+            />
+          )}
           <Section title="Backend calls" right={<span>{d.backend_calls?.length ?? 0}</span>} empty={!d.backend_calls?.length}>
             <Table head={["Method", "URL", "Via", "Backend endpoint"]} rows={(d.backend_calls ?? []).map((c: any) => [
               <MethodBadge method={c.method} />, c.url, <span className="text-muted">{c.via}{c.function ? ` · ${c.function}()` : ""}{c.component ? ` · ${c.component}` : ""}</span>,
@@ -468,6 +473,84 @@ function DatabaseBody({ d, nav }: { d: Details; nav: Nav }) {
   );
 }
 
+function UnitsTable({ units, line }: { units: any[]; line: (n: number) => void }) {
+  if (!units?.length) return null;
+  const label = units.some((u) => u.kind === "paragraph" || u.kind === "section") ? "Paragraphs / sections" : "Procedures / subroutines";
+  return (
+    <Section title={label} right={<span>{units.length}</span>}>
+      <Table head={["Name", "Kind", "Lines", "Complexity", "Performs", "Calls"]} rows={units.map((u: any) => [
+        <button type="button" className="hover:text-primary" onClick={() => line(u.line)}>{u.kind === "paragraph" && u.section ? <span className="text-faint">{"  "}</span> : null}{u.name}</button>,
+        <span className="text-muted">{u.kind}{u.exported ? " · export" : ""}</span>, `${u.line}–${u.end}`,
+        <span className={u.complexity > 10 ? "text-warning" : ""}>{u.complexity}</span>, [...(u.performs ?? []), ...(u.go_to ?? []).map((g: string) => `GO TO ${g}`)].join(", "), (u.calls ?? []).join(", "),
+      ])} />
+    </Section>
+  );
+}
+
+function ProgramBody({ d, line }: { d: Details; line: (n: number) => void }) {
+  const at = (n: number) => (n ? <button type="button" className="link" onClick={() => line(n)}>L{n}</button> : "");
+  return (
+    <>
+      <Section title="Program" right={<span>{d.dialect}</span>}>
+        <KV rows={[["Program", d.program_id], ["Role", d.role], ["Entry parameters", <Chips values={d.entry ?? []} className="border-layer-service/40 text-ink" />], ["Linkage", (d.linkage ?? []).join(", ")],
+          ["Lines of code", d.loc], ["Complexity", d.complexity], ["Ends with", (d.ends ?? []).join(", ")], ["Exports", (d.exports ?? []).join(", ")],
+          ["Run by", (d.run_by ?? []).join(", ")], ["Copybooks", <Chips values={(d.copybooks ?? []).map((c: any) => `${c.name}${c.resolved || c.system ? "" : " ?"}`)} />]]} />
+        {(d.copybooks ?? []).some((c: any) => !c.resolved && !c.system) && <p className="mt-1 font-mono text-micro text-faint">? = member not found in this repository</p>}
+      </Section>
+      <Section title="Calls" right={<span>{d.calls?.length ?? 0}</span>} empty={!d.calls?.length}>
+        <Table head={["Target", "Via", "From", "Line", "Status"]} rows={(d.calls ?? []).map((c: any) => [
+          c.target || <span className="text-warning">{c.variable}</span>, <span className="text-muted">{c.via}{c.dynamic && c.variable ? ` (${c.variable})` : ""}</span>, c.paragraph ?? "", at(c.line),
+          c.resolved ? <span className="text-ok">in repository</span> : c.system ? <span className="text-muted">platform service</span> : c.target ? <span className="text-faint">not in repository</span> : <span className="text-warning">dynamic, unresolved</span>,
+        ])} />
+      </Section>
+      <Section title="Files" right={<span>{d.files?.length ?? 0}</span>} empty={!d.files?.length}>
+        <Table head={["File", "Device / organisation", "Assigned to", "Ops", "Line"]} rows={(d.files ?? []).map((f: any) => [
+          f.name, <span className="text-muted">{[f.device, f.organization, f.access, f.keyed ? "keyed" : ""].filter(Boolean).join(" · ")}</span>,
+          <span>{f.target ? <span className="text-ok">{String(f.target).replace(/^file:/, "")}</span> : f.external || f.assign}{f.record_key ? <span className="text-muted"> key {f.record_key}</span> : null}</span>,
+          <span className="text-primary">{Array.isArray(f.ops) ? f.ops.join("") : ""}</span>, at(f.line),
+        ])} />
+      </Section>
+      <Section title="Embedded SQL" right={<span>{d.sql?.length ?? 0}</span>} empty={!d.sql?.length}>
+        <Table head={["Operation", "Tables", "Line", "Statement"]} rows={(d.sql ?? []).map((q: any) => [
+          <span className="text-primary">{q.operation}{q.cursor ? ` (${q.cursor})` : ""}</span>, Object.entries(q.tables ?? {}).map(([t, o]) => `${t} ${(o as string[]).join("")}`).join(", ") || q.procedure || q.declares || "", at(q.line),
+          <span className="block max-w-[420px] truncate text-muted" title={q.sql}>{q.sql}</span>,
+        ])} />
+      </Section>
+      <Section title="CICS / DL/I commands" right={<span>{(d.cics?.length ?? 0) + (d.dli?.length ?? 0)}</span>} empty={!d.cics?.length && !d.dli?.length}>
+        <Table head={["Command", "Target", "Line"]} rows={[...(d.cics ?? []).map((c: any) => [`EXEC CICS ${c.command}`, c.target, at(c.line)]), ...(d.dli ?? []).map((c: any) => [`EXEC DLI ${c.command}`, c.segment, at(c.line)])]} />
+      </Section>
+      <Section title="Screens" empty={!d.screens?.length}>
+        <Table head={["Screen", "Operation", "Line"]} rows={(d.screens ?? []).map((s: any) => [s.resolved ? s.name : <span className="text-faint">{s.name}</span>, s.op, at(s.line)])} />
+      </Section>
+      <UnitsTable units={d.units} line={line} />
+      <Rules rules={d.rules} llm={d.llm_rules} onLine={line} />
+    </>
+  );
+}
+
+function CopybookBody({ d, line }: { d: Details; line: (n: number) => void }) {
+  const records: any[] = d.records ?? [];
+  return (
+    <>
+      <Section title="Record layout" right={<span>{records.length} entries</span>} empty={!records.length}>
+        <Table head={["Level", "Name", "PIC", "Usage", "Occurs / redefines", "Value"]} rows={records.map((r: any) => [
+          <span className="text-muted">{String(r.level).padStart(2, "0")}</span>,
+          <button type="button" className="hover:text-primary" style={{ paddingLeft: Math.min(r.level === 88 ? 6 : Math.max(0, r.level - 1), 12) * 4 }} onClick={() => line(r.line)}>{r.name}</button>,
+          <span className="text-primary">{r.pic ?? ""}</span>, r.usage ?? "", [r.occurs ? `OCCURS ${r.occurs}` : "", r.redefines ? `REDEFINES ${r.redefines}` : ""].filter(Boolean).join(" "), <span className="text-muted">{r.value ?? ""}</span>,
+        ])} />
+      </Section>
+      {(d.dclgen ?? []).map((t: any) => (
+        <Section key={t.table} title={`DCLGEN · ${t.table}`} right={<span>{t.columns?.length ?? 0} columns</span>}>
+          <Table head={["Column", "Type", "Nullable"]} rows={(t.columns ?? []).map((c: any) => [c.name, <span className="text-primary">{c.type}</span>, c.nullable ? "yes" : <span className="text-warning">NOT NULL</span>])} />
+        </Section>
+      ))}
+      <Section title="Prototypes" empty={!d.prototypes?.length}>
+        <Table head={["Prototype", "External program", "External procedure", "Line"]} rows={(d.prototypes ?? []).map((p: any) => [p.name, p.extpgm, p.extproc, p.line ? `L${p.line}` : ""])} />
+      </Section>
+    </>
+  );
+}
+
 function GenericBody({ item, d, line }: { item: CatalogItem; d: Details; line: (n: number) => void }) {
   switch (item.kind) {
     case "service":
@@ -506,10 +589,43 @@ function GenericBody({ item, d, line }: { item: CatalogItem; d: Details; line: (
           </Section>
         </>
       );
+    case "program":
+      return <ProgramBody d={d} line={line} />;
+    case "transaction":
+      return (
+        <Section title="CICS transaction">
+          <KV rows={[["Transaction ID", d.transid], ["Program", d.program ? <span className={d.resolved ? "text-ok" : ""}>{d.program}{d.resolved ? "" : " (not in this repository)"}</span> : ""], ["Group", d.group], ["Description", d.description], ["Profile", d.profile], ["Defined by", d.source], ["Started by", (d.started_by ?? []).join(", ")]]} />
+        </Section>
+      );
+    case "copybook":
+      return <CopybookBody d={d} line={line} />;
+    case "file":
+      return (
+        <>
+          <Section title="File / dataset">
+            <KV rows={[["Organisation", d.organization], ["Dataset (DSN)", d.dsn], ["DD names", <Chips values={d.ddnames ?? []} />], ["CICS file", (d.cics_files ?? []).join(", ")], ["Record key", d.record_key], ["Access", d.access], ["Record layouts", (d.records ?? []).join(", ")], ["Formats", (d.formats ?? []).join(", ")], ["Defined in", d.defined_in]]} />
+          </Section>
+          <Section title="Accessed by" right={<span>{d.accessed_by?.length ?? 0}</span>} empty={!d.accessed_by?.length}>
+            <Table head={["Program / job", "Kind", "Ops", "Via"]} rows={(d.accessed_by ?? []).map((a: any) => [a.name, <span className="text-muted">{a.kind}</span>, <span className="text-primary">{(a.ops ?? []).join("")}</span>, <span className="text-muted">{a.via}</span>])} />
+          </Section>
+        </>
+      );
     case "job":
     case "listener":
       return (
         <>
+          {item.kind === "job" && d.steps?.length > 0 && (
+            <Section title="Job steps" right={<span>{d.job_type} · {d.steps.length}</span>}>
+              <Table head={["Step", "Runs", "Datasets (DD = DSN, ops)", "Line"]} rows={d.steps.map((st: any) => [
+                st.name,
+                <span className="text-primary">{st.program ? `PGM=${st.program}` : st.proc}{st.via ? <span className="text-muted"> via {st.via}{st.plan ? ` PLAN(${st.plan})` : ""}</span> : null}</span>,
+                <div className="space-y-0.5">{(st.dds ?? []).filter((dd: any) => dd.dsn || dd.sysout || dd.instream).map((dd: any, i: number) => (
+                  <div key={i} className="text-micro"><span className="text-muted">{dd.name || "(concat)"}</span> = {dd.dsn ? `${dd.dsn}${dd.member ? `(${dd.member})` : ""}` : dd.sysout ? `SYSOUT=${dd.sysout}` : "instream"}{dd.ops?.length ? <span className="text-primary"> {dd.ops.join("")}</span> : null}</div>
+                ))}</div>,
+                <button type="button" className="link" onClick={() => line(st.line)}>L{st.line}</button>,
+              ])} />
+            </Section>
+          )}
           <Section title={item.kind === "job" ? "Schedule" : "Subscription"}>
             <KV rows={[["When", d.human || (d.schedule && Object.entries(d.schedule).map(([k, v]) => `${k}=${v}`).join(" · "))], ["Trigger", d.trigger || d.job_type], ["Transport", d.transport], ["Destinations", <Chips values={d.destinations ?? []} />], ["Group", d.group], ["Event type", d.event_type], ["Transactional", d.transactional ? "yes" : ""], ["Lock", d.lock], ["Calls", (d.calls ?? []).join(", ")]]} />
           </Section>

@@ -1,0 +1,15 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. INTCALC.
+      * interest calculation, member exported without an extension
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01  LK-MST   PIC X(20).
+       01  LK-IN    PIC X(20).
+       PROCEDURE DIVISION USING LK-MST LK-IN.
+       CALC-INTEREST SECTION.
+       CALC-1.
+           IF LK-MST = SPACES
+              GO TO CALC-EXIT
+           END-IF.
+       CALC-EXIT.
+           GOBACK.

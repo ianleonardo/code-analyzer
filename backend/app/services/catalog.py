@@ -21,13 +21,14 @@ from app.services.analyzer.languages import classify_path
 LAYERS = ("api", "service", "data", "ui", "shared")
 LAYER_LABELS = {"api": "API", "service": "Service", "data": "Data", "ui": "UI", "shared": "Shared"}
 KIND_LABELS = {
-    "endpoint": "Endpoints", "service": "Services", "job": "Scheduled jobs", "listener": "Listeners", "database": "Databases", "table": "Tables", "view": "Views",
-    "repository": "Repositories / DAOs", "query": "Queries", "procedure": "Procedures / packages", "trigger": "Triggers", "screen": "Screens", "component": "Template fragments",
-    "view_model": "View models", "api_client": "API clients", "dto": "DTOs / types", "enum": "Enums", "exception": "Exceptions", "config": "Configuration keys",
+    "endpoint": "Endpoints", "transaction": "Transactions", "service": "Services", "program": "Programs", "job": "Scheduled / batch jobs", "listener": "Listeners",
+    "database": "Databases", "table": "Tables", "view": "Views", "file": "Files / datasets", "repository": "Repositories / DAOs", "query": "Queries",
+    "procedure": "Procedures / packages", "trigger": "Triggers", "screen": "Screens", "component": "Template fragments", "view_model": "View models",
+    "api_client": "API clients", "dto": "DTOs / types", "copybook": "Copybooks", "enum": "Enums", "exception": "Exceptions", "config": "Configuration keys",
     "config_class": "Configuration classes", "security": "Security", "integration": "Outbound integrations", "constants": "Constants", "utility": "Utilities",
     "bean_config": "Bean configuration", "manifest": "App manifests", "topic": "Topics / events", "mapper": "Mappers",
 }
-TRACE_KINDS = {"calls", "submits", "renders", "uses", "accesses", "declares", "runs", "implemented by", "calls procedure", "publishes", "delivers to", "member of", "redirects to"}
+TRACE_KINDS = {"calls", "submits", "renders", "uses", "accesses", "declares", "runs", "implemented by", "calls procedure", "publishes", "delivers to", "member of", "redirects to", "starts"}
 
 
 # --- build ----------------------------------------------------------------------------------------------------------
@@ -116,6 +117,28 @@ def describe(item: Item, out_links: list[tuple[str, str]], in_links: list[tuple[
         lines.append("Methods: " + "; ".join(m.get("signature", m.get("name", "")) for m in d.get("methods", [])[:30]))
     if item.kind == "job":
         lines.append(f"Schedule: {d.get('human') or json.dumps(d.get('schedule', {}))}")
+        if d.get("steps"):
+            lines.append("Steps: " + "; ".join(f"{s.get('name')} runs {s.get('program') or s.get('proc')}" + (f" (DDs {', '.join(dd.get('name', '') + '=' + dd.get('dsn', '') for dd in s.get('dds', []) if dd.get('dsn'))})" if s.get("dds") else "")
+                                               for s in d["steps"][:20]))
+    if item.kind == "program":
+        lines.append(f"{d.get('dialect')} program, {d.get('role')}; entry parameters: {', '.join(d.get('entry', [])) or 'none'}; {d.get('loc')} lines; complexity {d.get('complexity')}")
+        if d.get("calls"):
+            lines.append("Calls programs: " + ", ".join(f"{c.get('target') or c.get('variable')} ({c.get('via')})" for c in d["calls"][:25]))
+        if d.get("files"):
+            lines.append("Files: " + "; ".join(f"{f.get('name')} -> {f.get('target') or f.get('external')} {''.join(f.get('ops', []))}" for f in d["files"][:20]))
+        if d.get("sql"):
+            lines.append("SQL: " + "; ".join(f"{s.get('operation')} {', '.join(s.get('tables', {}))}" for s in d["sql"][:20]))
+        if d.get("units"):
+            lines.append("Paragraphs / procedures: " + ", ".join(u["name"] for u in d["units"][:60]))
+    if item.kind == "transaction":
+        lines.append(f"CICS transaction {d.get('transid')} runs program {d.get('program')} ({d.get('source')}){' — ' + d['description'] if d.get('description') else ''}")
+    if item.kind == "copybook":
+        if d.get("records"):
+            lines.append("Record layout: " + "; ".join(f"{r.get('level')} {r.get('name')} {r.get('pic', '')}".strip() for r in d["records"][:40]))
+        if d.get("dclgen"):
+            lines.append("DCLGEN for DB2 table(s): " + ", ".join(t["table"] for t in d["dclgen"]))
+    if item.kind == "file":
+        lines.append(f"{d.get('organization')} {item.name}; DD names {', '.join(d.get('ddnames', []))}; accessed by " + ", ".join(f"{a.get('name')} ({''.join(a.get('ops', []))})" for a in d.get("accessed_by", [])[:20]))
     if item.kind == "config":
         lines.append("Values: " + "; ".join(f"{v['profile']}={v['value']}" for v in d.get("values", [])[:8]))
     if item.kind == "database":
@@ -264,6 +287,14 @@ def _badge(row: dict, details: dict) -> dict:
         return {"operation": details.get("operation", ""), "dialect": details.get("dialect", "")}
     if kind == "job":
         return {"schedule": details.get("human", "")}
+    if kind == "program":
+        return {"dialect": details.get("dialect", ""), "role": details.get("role", ""), "units": len(details.get("units", [])), "complexity": details.get("complexity", 0)}
+    if kind == "transaction":
+        return {"program": details.get("program", ""), "resolved": bool(details.get("resolved"))}
+    if kind == "file":
+        return {"organization": details.get("organization", ""), "accessors": len(details.get("accessed_by", []))}
+    if kind == "copybook":
+        return {"fields": len(details.get("records", [])), "dclgen": len(details.get("dclgen", []))}
     if kind == "listener":
         dest = details.get("destinations", [])
         return {"transport": details.get("transport", ""), "destination": dest[0] if dest else ""}
@@ -472,10 +503,13 @@ def sqlname(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]", "_", (name or "").split(".")[-1]).upper() or "TABLE"
 
 
+CRUD_ACTORS = ["endpoint", "transaction", "service", "program", "job", "listener", "view_model", "screen", "procedure"]
+
+
 def crud(user: dict, analysis_id: str) -> dict:
     require(user, "repositories", "read")
     _completed(analysis_id)
-    rows = db.fetchall("SELECT item_id, name, details_json FROM analysis_catalog WHERE analysis_id = ? AND kind IN ('table', 'view') ORDER BY name", [analysis_id])
+    rows = db.fetchall("SELECT item_id, name, details_json FROM analysis_catalog WHERE analysis_id = ? AND kind IN ('table', 'view', 'file') ORDER BY name", [analysis_id])
     actors: dict[str, dict] = {}
     matrix = []
     for row in rows:
@@ -484,12 +518,12 @@ def crud(user: dict, analysis_id: str) -> dict:
         for op, names in (details.get("crud") or {}).items():
             for actor in names:
                 kind, _, name = actor.partition(":")
-                if kind not in ("endpoint", "service", "job", "listener", "view_model", "screen", "procedure"):
+                if kind not in CRUD_ACTORS:
                     continue
                 actors.setdefault(actor, {"key": actor, "kind": kind, "name": name})
                 cells[actor] = "".join(sorted(set(cells.get(actor, "") + op), key="CRUD".index))
         matrix.append({"table": row["name"], "item_id": row["item_id"], "cells": cells})
-    ordered = sorted(actors.values(), key=lambda a: (["endpoint", "service", "job", "listener", "view_model", "screen", "procedure"].index(a["kind"]), a["name"]))
+    ordered = sorted(actors.values(), key=lambda a: (CRUD_ACTORS.index(a["kind"]), a["name"]))
     return {"actors": ordered[:150], "rows": matrix}
 
 
@@ -743,7 +777,7 @@ def diff(left_id: str, right_id: str) -> dict:
     if not left and not right:
         return {"available": False}
     result: dict = {"available": True, "breaking": []}
-    for kind in ("endpoint", "table", "screen", "config", "job", "api_client"):
+    for kind in ("endpoint", "table", "screen", "config", "job", "api_client", "program", "transaction"):
         lk = {k for k, v in left.items() if v["kind"] == kind}
         rk = {k for k, v in right.items() if v["kind"] == kind}
         changed = []
@@ -819,4 +853,18 @@ def _item_changes(kind: str, a: dict, b: dict) -> list[dict]:
     elif kind == "api_client":
         if a.get("endpoint") and not b.get("endpoint"):
             out.append({"text": "no longer matches a backend endpoint", "breaking": True})
+    elif kind == "program":
+        if a.get("entry") != b.get("entry"):
+            out.append({"text": f"entry parameters: {', '.join(a.get('entry', [])) or 'none'} → {', '.join(b.get('entry', [])) or 'none'}", "breaking": True})
+        ca = {c.get("target") or c.get("variable") for c in a.get("calls", [])}
+        cb = {c.get("target") or c.get("variable") for c in b.get("calls", [])}
+        if ca != cb:
+            out.append({"text": "calls: " + ", ".join([f"+{x}" for x in sorted(cb - ca)] + [f"−{x}" for x in sorted(ca - cb)])[:300], "breaking": False})
+        ta = {t for s in a.get("sql", []) for t in s.get("tables", {})} | {f.get("external", "") for f in a.get("files", [])}
+        tb = {t for s in b.get("sql", []) for t in s.get("tables", {})} | {f.get("external", "") for f in b.get("files", [])}
+        if ta != tb:
+            out.append({"text": "data accessed: " + ", ".join([f"+{x}" for x in sorted(tb - ta)] + [f"−{x}" for x in sorted(ta - tb)])[:300], "breaking": False})
+    elif kind == "transaction":
+        if a.get("program") != b.get("program"):
+            out.append({"text": f"program: {a.get('program')} → {b.get('program')}", "breaking": True})
     return out

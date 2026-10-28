@@ -16,7 +16,7 @@ from app.services import llm
 from app.services.analyzer.catalog.model import Catalog, Item
 
 logger = logging.getLogger(__name__)
-PRIORITY = {"endpoint": 0, "screen": 1, "service": 2, "job": 3, "listener": 3, "table": 4, "repository": 5, "view_model": 5, "api_client": 6, "procedure": 6,
+PRIORITY = {"endpoint": 0, "transaction": 0, "screen": 1, "service": 2, "program": 2, "job": 3, "listener": 3, "table": 4, "repository": 5, "view_model": 5, "api_client": 6, "procedure": 6,
             "integration": 7, "security": 7, "query": 8}
 BATCH = 5
 EXCERPT = 4500
@@ -28,12 +28,16 @@ def _facts(item: Item) -> dict:
         "endpoint": ("method", "path", "params", "security", "errors", "rules", "calls", "status_codes"),
         "screen": ("platform", "type", "routes", "fields", "actions", "backend_calls", "navigation", "rules"),
         "service": ("dependencies", "methods"),
-        "job": ("schedule", "human", "calls", "rules"),
+        "job": ("schedule", "human", "calls", "steps", "rules"),
         "listener": ("transport", "destinations", "calls", "rules"),
         "table": ("columns", "foreign_keys", "crud", "comment"),
         "repository": ("entity", "methods"),
         "view_model": ("state", "methods", "dependencies"),
         "procedure": ("params", "tables"),
+        "program": ("dialect", "role", "entry", "calls", "files", "sql", "screens", "units"),
+        "transaction": ("transid", "program", "description", "source"),
+        "copybook": ("records", "dclgen", "prototypes"),
+        "file": ("organization", "ddnames", "records", "accessed_by"),
     }.get(item.kind, tuple(d)[:8])
     out = {}
     for k in keep:

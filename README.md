@@ -30,7 +30,8 @@ and **Light Laboratory** modes.
      `*.csproj`, `Gemfile`, `composer.json`, …) → exact framework matrix, monorepo containers, architecture style,
      entry points, external systems, Docker/Compose/K8s/Terraform/CI, and README-vs-manifest **drift**.
   3. *Micro parsing & code graph* — symbols, imports, calls, complexity (Python via AST; Java, Kotlin, C#, TS/JS, Go,
-     Rust, PHP, Ruby, C/C++, SQL, COBOL, RPG/CL via pattern extractors with a nested-scope guard); `IMPORTS`,
+     Rust, PHP, Ruby, C/C++, SQL via pattern extractors with a nested-scope guard; COBOL, RPG, CL, JCL, DDS and BMS via
+     a column-aware legacy reader — see *Mainframe and IBM i* below); `IMPORTS`,
      `EXTENDS`, `IMPLEMENTS`, `INJECTS`, `CALLS`, `INCLUDES` edges; Tarjan SCC cycles; PageRank; canonical layers
      (api, service, data, ui, shared); file roles with evidence; behaviour tags (db-read, db-write, http-call, …).
   4. *Synthesis* — quality audit (CONCERNS.md registry and 0–100 health score), C4 diagrams in Mermaid (Context,
@@ -58,6 +59,26 @@ and **Light Laboratory** modes.
   - *Shared*: DTOs, enums, exceptions, configuration keys per profile (Spring, `.env`, Gradle BuildConfig, Info.plist,
     xcconfig; secrets masked; where each key is read), Spring Security configuration, `@ConfigurationProperties`,
     `@Bean` wiring, Feign integrations, constants, utilities, MapStruct mappers, Android manifests, topics.
+- **Mainframe and IBM i** (`app/services/analyzer/legacy.py`, `catalog/legacy.py`) — no compiler or IBM tooling needed:
+  - *Sources*: COBOL in fixed (sequence / indicator / identification areas) or free format, copybooks and DCLGEN
+    (`.cbl .cob .cblle .sqlcblle .pco .cpy .copy .dcl`), RPG III, RPG IV fixed specs and fully free ILE RPG
+    (`.rpg .rpgle .sqlrpgle .rpgleinc`), CL (`.clle .clp`), JCL jobs and procs (`.jcl .prc`), DDS physical / logical /
+    display / printer files (`.pf .lf .dspf .prtf`), CICS BMS maps (`.bms`) and CICS CSD definitions (`.csd`, or
+    `DEFINE` cards inside any text / JCL). Members exported without an extension (or as `.mbr` / `.txt`) are recognised
+    from their content and from library folder names (`QRPGLESRC`, `QDDSSRC`, `COPYLIB`, `PROCLIB`, …).
+  - *Per program*: PROGRAM-ID, `USING` / `*ENTRY PLIST` / `dcl-pi` parameters, paragraphs and sections (or procedures and
+    subroutines) with PERFORM / GO TO / EXSR flow and complexity, static and **dynamic** calls (`CALL WS-PGM` resolved
+    through `VALUE` clauses and `MOVE 'literal' TO`), `EXEC CICS LINK / XCTL`, `CALLP` through `EXTPGM` prototypes,
+    COPY / `EXEC SQL INCLUDE` / `/COPY`, embedded SQL with tables and CRUD, `SELECT … ASSIGN` and RPG F-spec / `dcl-f`
+    files with the operations actually performed, CICS file control, TS / TD queues, `SEND` / `RECEIVE MAP`, `EXFMT`,
+    `RETURN` / `START TRANSID`, EXEC DLI segments.
+  - *Catalogue*: programs, CICS transactions, JCL jobs (steps, `EXEC PGM=`, IKJEFT01 `RUN PROGRAM`, `EXEC PROC` with
+    `STEP.DD` overrides, symbolic `&HLQ..` substitution), datasets bound to the programs that use them through the step's
+    DD names (including called subprograms), DB2 tables from DCLGEN / DDS / embedded SQL, logical files as views,
+    3270 / 5250 screens rendered on a 24×80 character grid, and copybooks with their record layouts. The CRUD matrix covers
+    VSAM / sequential datasets as well as tables, and *Trace flow* follows transaction → program → screen / table / file.
+  - *Not covered*: macro-generated code, `CBLTDLI` call-level IMS segments, REPLACING text substitution into copybooks,
+    and compile-time `COPY` libraries outside the repository (they are listed as unresolved).
   - Trace any item upstream and downstream as a flowchart or sequence diagram; export everything to Markdown or Excel.
     With an LLM configured, the most important items also get a purpose and business rules citing line numbers (cached
     by content hash). Older analyses can be catalogued offline from their stored files (no clone needed).

@@ -1,0 +1,12 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. AUDITLOG.
+       DATA DIVISION.
+       LINKAGE SECTION.
+       01  LK-REC  PIC X(20).
+       PROCEDURE DIVISION USING LK-REC.
+           EXEC SQL
+             INSERT INTO AUDIT_LOG (REC, TS)
+               VALUES (:LK-REC, CURRENT TIMESTAMP)
+           END-EXEC.
+           CALL 'CEE3ABD'.
+           GOBACK.
