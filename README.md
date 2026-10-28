@@ -88,6 +88,13 @@ and **Light Laboratory** modes.
 - **Feature catalogue** (repository › Features) — built automatically after each analysis of the default branch from
   the entry points (LLM, or by route / folder); users confirm and edit features with route / path / item / name patterns
   (confirmed features are never replaced); PR impact groups entry points by them.
+- **URI resolution for mobile and Camel** — URLs are resolved from values, not text: constants and companion/object members,
+  enums, helper functions, `String.format`, Kotlin/Swift interpolation, `Uri.Builder` chains, `BuildConfig` / xcconfig /
+  Info.plist base URLs, and wrappers (repository → use case → `ApiClient.get(path)`) evaluated at every call site.
+  Camel routes (Java, XML, YAML) yield full outbound URLs: `{{placeholders}}` per profile, `${header.x}`, `toD`,
+  `bridgeEndpoint` pass-through, HTTP method from headers or the ingress, `direct:` hops shared by v1 / v2 routes and
+  choice branches. Credentials are masked. Links are version-aware (a version-less call is ambiguous between v1 and v2
+  and goes to Review); partial URLs lower the score and show chips in the Review queue.
 - **System landscapes** (rail › Systems) — named groups of repositories linked end to end from their layer catalogues:
   *HTTP* (screens, Retrofit / Feign / RestTemplate / WebClient / fetch / URLSession calls → endpoints in another
   repository, using method + path template, context path, base-URL configuration per profile, host and service names),
