@@ -607,6 +607,7 @@ _USAGES = [
 def prime(ctx: Context) -> list[dict]:
     """Collects configuration and makes default-profile values available for ${placeholder} resolution."""
     entries = collect(ctx)
+    ctx.config_entries = entries  # type: ignore[attr-defined]
     for entry in entries:
         if entry["profile"] in ("default", "") or entry["key"] not in ctx.config_values:
             ctx.config_values[entry["key"]] = entry["raw"]

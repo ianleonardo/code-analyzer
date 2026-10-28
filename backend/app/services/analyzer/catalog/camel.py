@@ -26,6 +26,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 
 import yaml
+from app.services.analyzer.catalog import camel_egress as eg
 from app.services.analyzer.catalog import sql as sqlmod
 from app.services.analyzer.catalog.model import Catalog, Context, Item, SourceFile, snippet
 
@@ -61,6 +62,28 @@ def _parse_uri(uri: str) -> tuple[str, str, dict[str, str]]:
             elif part.strip():
                 options[part.strip()] = ""
     return scheme, dest.strip(), options
+
+
+def _register(cat: Catalog, item: Item | None, file: SourceFile, line: int, ingress: str, route_id: str, owner: str, steps: list, java: bool = False, code: str = "") -> None:
+    """Remembers a route (its ordered steps) so camel_egress can resolve outbound HTTP calls and walk direct: hops."""
+    if item is None:
+        return
+    scheme, dest, options = _parse_uri(ingress)
+    method, path = "", ""
+    if scheme in HTTP_SCHEMES or scheme == "rest":
+        if scheme in ("rest", "rest-api") and re.match(r"^(get|post|put|delete|patch|head|options):", dest, re.I):
+            method, _, dest = dest.partition(":")
+            method = method.upper()
+        else:
+            method = (options.get("httpMethodRestrict") or "").split(",")[0].upper()
+        path = dest if dest.startswith("/") else "/" + dest
+    elif ingress.startswith("rest:"):
+        parts = ingress.split(":", 2)
+        method, path = parts[1].upper(), parts[2]
+        scheme = "rest"
+    cat.extra.setdefault("camel_routes", []).append(eg.Route(key=item.key, file=file, line=line, ingress=ingress, route_id=route_id, owner=owner, steps=steps,
+                                                             method=method, path=path, scheme=scheme, dest=dest, java=java, code=code,
+                                                             prefix=options.get("matchOnUriPrefix", "").lower() == "true"))
 
 
 def _line_at(text: str, index: int) -> int:
@@ -99,6 +122,9 @@ def extract(ctx: Context, cat: Catalog) -> None:
         ):
             continue
         _extract_yaml_routes(ctx, cat, file, direct_routes)
+
+    # 4. outbound HTTP calls with full URLs and the route graph from every ingress to them
+    eg.finish(ctx, cat)
 
 
 # --- Java / Kotlin DSL extractor -------------------------------------------------------------------------------------
@@ -154,6 +180,7 @@ def _extract_java_routes(ctx: Context, cat: Catalog, file: SourceFile, direct_ro
         item = _create_route_item(cat, file, raw_uri, route_id, targets, beans, class_name, line, end_line, stmt)
         if item:
             _link_route(ctx, cat, item, class_name, raw_uri, targets, beans, direct_routes)
+            _register(cat, item, file, line, raw_uri, route_id, class_name, eg.steps_from_java(stmt, line), java=True)
 
 
 def _extract_java_rest_dsl(ctx: Context, cat: Catalog, file: SourceFile, class_name: str) -> None:
@@ -210,10 +237,9 @@ def _extract_java_rest_dsl(ctx: Context, cat: Catalog, file: SourceFile, class_n
             )
             if class_name:
                 cat.link(item.key, f"svc:{class_name}", "member of")
-            if target:
-                scheme, dest, _ = _parse_uri(target)
-                if scheme in ("direct", "seda"):
-                    cat.link(item.key, f"svc:camel:{dest}", "routes to", target)
+            rest_route_id = re.search(r'\.(?:routeId|id)\s*\(\s*"([^"]+)"', verb_block)
+            _register(cat, item, file, line, f"rest:{verb}:{full_path}", rest_route_id.group(1) if rest_route_id else "", class_name,
+                      eg.steps_from_java(verb_block, line), java=True)
 
 
 # --- XML DSL extractor -----------------------------------------------------------------------------------------------
@@ -259,10 +285,7 @@ def _extract_xml_routes(ctx: Context, cat: Catalog, file: SourceFile, direct_rou
                         code=snippet(file.text, max(1, line - 2), line + 6, 20),
                     )
                 )
-                if target:
-                    scheme, dest, _ = _parse_uri(target)
-                    if scheme in ("direct", "seda"):
-                        cat.link(item.key, f"svc:camel:{dest}", "routes to", target)
+                _register(cat, item, file, line, f"rest:{verb}:{full_path}", verb_elem.attrib.get("id", ""), file.stem, eg.steps_from_xml(verb_elem, file.text))
 
     # 2. <route id="..."> blocks
     for route in root.iter("route"):
@@ -293,6 +316,7 @@ def _extract_xml_routes(ctx: Context, cat: Catalog, file: SourceFile, direct_rou
         item = _create_route_item(cat, file, raw_uri, route_id, targets, beans, file.stem, line, line + 10, "")
         if item:
             _link_route(ctx, cat, item, "", raw_uri, targets, beans, direct_routes)
+            _register(cat, item, file, line, raw_uri, route_id, file.stem, eg.steps_from_xml(route, file.text))
 
 
 # --- YAML DSL extractor ----------------------------------------------------------------------------------------------
@@ -348,6 +372,7 @@ def _extract_yaml_routes(ctx: Context, cat: Catalog, file: SourceFile, direct_ro
             item = _create_route_item(cat, file, raw_uri, route_id, targets, beans, file.stem, line, line + 10, "")
             if item:
                 _link_route(ctx, cat, item, "", raw_uri, targets, beans, direct_routes)
+                _register(cat, item, file, line, raw_uri, route_id, file.stem, eg.steps_from_yaml(steps))
 
         # - rest:
         rest_data = entry.get("rest")
@@ -382,10 +407,8 @@ def _extract_yaml_routes(ctx: Context, cat: Catalog, file: SourceFile, direct_ro
                             code=snippet(file.text, max(1, line - 2), line + 6, 20),
                         )
                     )
-                    if target:
-                        scheme, dest, _ = _parse_uri(target)
-                        if scheme in ("direct", "seda"):
-                            cat.link(item.key, f"svc:camel:{dest}", "routes to", target)
+                    _register(cat, item, file, line, f"rest:{verb.upper()}:{full_path}", "", file.stem,
+                              eg.steps_from_yaml([{"to": target}] if target else []))
 
 
 # --- Item creation and linking ---------------------------------------------------------------------------------------

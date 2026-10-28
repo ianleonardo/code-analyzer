@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.services.analyzer.catalog import android, camel, config, data, jvm, linker, python, swift, web
+from app.services.analyzer.catalog import android, camel, config, data, jvm, linker, mobile_http, python, swift, web
 from app.services.analyzer.catalog.model import Catalog, Context, Item, Link, SourceFile
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ def build(files: list[SourceFile], dependencies: list[dict], edges: list[tuple[s
     _step("python", python.extract, ctx, cat, errors=errors)
     _step("android", android.extract, ctx, cat, errors=errors)
     _step("ios", swift.extract, ctx, cat, errors=errors)
+    _step("http-calls", mobile_http.extract, ctx, cat, errors=errors)
     _step("web", web.extract, ctx, cat, errors=errors)
     _step("data", data.extract_late, ctx, cat, entries, state, errors=errors)
     _step("config-items", config.extract, ctx, cat, entries, errors=errors)

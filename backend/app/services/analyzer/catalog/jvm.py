@@ -806,6 +806,37 @@ def _controller(ctx: Context, cat: Catalog, ref: TypeRef, exceptions: dict) -> N
                         cat.pending_topics.append((item.key, event, "publishes"))
 
 
+def _retrofit_bases(ctx: Context) -> dict[str, str]:
+    """Retrofit.Builder().baseUrl(X) ... .create(Api::class.java): interface name -> resolved base URL ("*" when every builder agrees)."""
+    cached = getattr(ctx, "_retrofit_bases", None)
+    if cached is not None:
+        return cached
+    from app.services.analyzer.catalog.structure import match_close, split_top
+    from app.services.analyzer.catalog.uris import resolver_for
+
+    resolver = resolver_for(ctx)
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    for file in ctx.code_files("Kotlin", "Java"):
+        if "baseUrl" not in file.text or "Retrofit" not in file.text:
+            continue
+        for m in re.finditer(r"\.\s*baseUrl\s*\(", file.text):
+            args = split_top(file.text[m.end() : match_close(file.text, m.end() - 1)])
+            if not args:
+                continue
+            base = resolver.resolve(args[0], file).text.strip()
+            if not base or base.startswith("{"):
+                continue
+            seen.add(base)
+            tail = file.text[m.end() : m.end() + 1500]
+            for c in re.finditer(r"\.\s*create\s*\(\s*(\w+)(?:::class\.java|\.class)\s*\)", tail):
+                out.setdefault(c.group(1), base)
+    if len(seen) == 1:
+        out["*"] = next(iter(seen))
+    ctx._retrofit_bases = out  # type: ignore[attr-defined]
+    return out
+
+
 def _client(ctx: Context, cat: Catalog, ref: TypeRef, style: str) -> None:
     """Feign (server-side outbound integration) or Retrofit (mobile / client API) interface."""
     decl, file = ref.decl, ref.file
@@ -829,7 +860,14 @@ def _client(ctx: Context, cat: Catalog, ref: TypeRef, style: str) -> None:
             if ann is None:
                 continue
             verb = ann.name if ann.name != "HTTP" else (ann.string("method") or "ANY")
-            path = ctx.resolve(ann.raw("value", "path", "") or '""')
+            raw_path = ann.raw("value", "path", "") or '""'
+            path = ctx.resolve(raw_path)
+            if "{" in path or "$" in raw_path or "(" in raw_path or "." in raw_path:
+                from app.services.analyzer.catalog.uris import resolver_for
+
+                better = resolver_for(ctx).resolve(raw_path, file, decl.name).text
+                if better and better.count("{") <= path.count("{"):
+                    path = better
         else:
             ann = next((a for a in method.annotations if a.name in MAPPINGS), None)
             if ann is None:
@@ -855,7 +893,8 @@ def _client(ctx: Context, cat: Catalog, ref: TypeRef, style: str) -> None:
         item = cat.add(Item(layer, "api_client" if retrofit else "integration", key, f"{verb} {full}", file.path, method.line, method.end_line, file.language,
                             "Retrofit" if retrofit else "OpenFeign", f"{decl.name}.{method.name}(...): {type_label(method.type)}",
                             {"client": decl.name, "method": verb, "path": full, "operation": method.name, "params": params, "request": entry["request"],
-                             "response": entry["response"], "target": target_name, "base_url": base},
+                             "response": entry["response"], "target": target_name,
+                             "base_url": base or (_retrofit_bases(ctx).get(decl.name) or _retrofit_bases(ctx).get("*", "") if retrofit else "")},
                             code=snippet(file.text, method.line - 1, method.end_line, 20)))
         cat.type_members.setdefault(decl.name, {})[method.name] = item.key
 

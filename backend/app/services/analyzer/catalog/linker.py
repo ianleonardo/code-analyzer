@@ -199,6 +199,8 @@ def link(ctx: Context, cat: Catalog) -> None:
             if call.get("url") == url and call.get("method") == method and target is not None:
                 call["endpoint"] = target.key
     for client in cat.by_kind("api_client", "integration"):
+        if client.framework == "Apache Camel" and not re.match(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", client.details.get("base_url") or "localhost"):
+            continue  # a Camel route calling another host is a call to another service, never to this repository's own REST endpoint
         target = index.match(client.details.get("method", ""), client.details.get("path", ""))
         if target is not None:
             cat.link(client.key, target.key, "calls", client.name)

@@ -252,7 +252,7 @@ def http_calls(member: Member) -> list[dict]:
         if source and source["kind"] == "screen":
             screens_of.setdefault(link["target_key"], []).append(source["name"])
 
-    def add(key: str, item: dict, method: str, url: str, base: str = "", target: str = "", client: str = "", via: str = "", line: int = 0, name: str = "") -> None:
+    def add(key: str, item: dict, method: str, url: str, base: str = "", target: str = "", client: str = "", via: str = "", line: int = 0, name: str = "", more: dict | None = None) -> None:
         if not url and not base:
             return
         url = re.sub(r"^/?(https?):/+", r"\1://", url or "")
@@ -263,6 +263,7 @@ def http_calls(member: Member) -> list[dict]:
             "line": line or item["line_start"], "method": (method or "").upper(), "url": url or "", "base": base or "", "target": target or "",
             "client": client or "", "via": via or "", "screens": sorted(set(screens_of.get(item["item_key"], [])))[:10],
             "features": member.features.get(item["item_key"], []),
+            **(more or {}),
         })
 
     for item in member.items.values():
@@ -273,7 +274,9 @@ def http_calls(member: Member) -> list[dict]:
                     screens_of.setdefault(item["item_key"], []).append(used.get("name", ""))
             if d.get("endpoint"):
                 continue  # resolved inside the same repository
-            add(item["item_key"], item, d.get("method", ""), d.get("path", ""), d.get("base_url", ""), d.get("target", ""), d.get("client", ""), d.get("via", ""))
+            more = {"unresolved": d.get("unresolved") or [], "fraction": float(d.get("confidence", 1.0) or 0), "variants": (d.get("base_variants") or []) + (d.get("variants") or []),
+                    "version": d.get("version", ""), "condition": d.get("condition", ""), "note": d.get("method_source", "") if d.get("passthrough") else ""}
+            add(item["item_key"], item, d.get("method", ""), d.get("path", ""), d.get("base_url", ""), d.get("target", ""), d.get("client", ""), d.get("via", ""), more=more)
     client_sigs = {(c["method"], norm_path(split_url(c["url"])[1])) for c in calls.values()}
     client_sigs |= {(str(i["details"].get("method", "")).upper(), norm_path(split_url(i["details"].get("path", ""))[1]))
                     for i in member.items.values() if i["kind"] in ("api_client", "integration")}
@@ -403,10 +406,29 @@ def _seg_match(call: list[str], ep: list[str]) -> tuple[bool, bool]:
     return True, exact
 
 
+def _version(item: dict) -> str:
+    d = item.get("details") or {}
+    if d.get("version"):
+        return str(d["version"])
+    m = re.search(r"(?i)(?:^|/)(v\d+(?:\.\d+)?)(?=/|$)", str(d.get("url") or d.get("path") or item.get("name") or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _unversioned(segments: list[str]) -> list[str]:
+    return [seg for seg in segments if not re.match(r"^v\d+(?:\.\d+)?$", seg)]
+
+
+def _literal(call: list[str], ep: list[str]) -> bool:
+    """At least one literal segment must be equal on both sides: a {parameter} matching a word says nothing about which
+    endpoint is meant (/legacy/{path} is not /accounts)."""
+    return any(c == e and c != "{}" for c, e in zip(call, ep))
+
+
 def _suffix(call: list[str], ep: list[str]) -> bool:
     if not ep or len(call) <= len(ep) or len(call) - len(ep) > 3:
         return False
-    return _seg_match(call[len(call) - len(ep):], ep)[0]
+    tail = call[len(call) - len(ep):]
+    return _literal(tail, ep) and _seg_match(tail, ep)[0]
 
 
 def _prefix_stripped_match(call: list[str], ep: list[str]) -> bool:
@@ -415,7 +437,7 @@ def _prefix_stripped_match(call: list[str], ep: list[str]) -> bool:
     if not call or len(call) >= len(ep) or len(ep) - len(call) > 3:
         return False
     suffix = ep[len(ep) - len(call):]
-    if not _seg_match(call, suffix)[0]:
+    if not _literal(call, suffix) or not _seg_match(call, suffix)[0]:
         return False
     prefix = ep[: len(ep) - len(call)]
     common_api_prefixes = {"api", "v1", "v2", "v3", "v4", "v5", "rest", "services", "public", "app", "internal", "api-v1"}
@@ -436,6 +458,15 @@ def _call_variants(call: dict, member: Member) -> list[dict]:
             else:
                 source = "url"
             variants.append({"host": host, "segments": path_segments(path), "source": source, "profile": uprofile or profile, "raw": url})
+    for alt in call.get("variants") or []:
+        host, path = split_url(alt)
+        if host:
+            full = path if re.match(r"^/", call["url"] or "/") and not call["base"] else path
+            if call["base"] and call["url"]:
+                full = path.rstrip("/") + "/" + (call["url"] or "").lstrip("/")
+            elif not call["base"] and call["url"] and path in ("", "/"):
+                full = call["url"]
+            variants.append({"host": host, "segments": path_segments(full), "source": "variant", "profile": "other profile", "raw": alt})
     if not any(v["host"] for v in variants):
         for key, profile, value in member.base_hints[:8]:
             bhost, bpath = split_url(value)
@@ -525,6 +556,7 @@ def match_http(call: dict, caller: Member, providers: list[Member]) -> list[dict
             continue
         id_score, id_evidence = _identity_evidence(call, variants, provider)
         best: dict | None = None
+        ties: list[dict] = []
         for ep in endpoints(provider):
             if call["method"] and ep["method"] not in ("", "ANY", "*", "REQUEST") and call["method"] != ep["method"]:
                 continue
@@ -541,6 +573,8 @@ def match_http(call: dict, caller: Member, providers: list[Member]) -> list[dict
                         structural, why, exact = 0.35, f"path ends with {ep['item']['name']} (prefix {'/'.join(v['segments'][: len(v['segments']) - len(ep['segments'])])} looks like a gateway / base path)", False
                     elif _prefix_stripped_match(v["segments"], ep["segments"]) or _prefix_stripped_match(v["segments"], ep["full_segments"]):
                         structural, why, exact = 0.45, f"path matches {ep['item']['name']} (under backend API prefix)", True
+                    elif any(_seg_match(v["segments"], _unversioned(segs))[0] and _unversioned(segs) != segs for segs in (ep["full_segments"], ep["segments"])):
+                        structural, why, exact = 0.45, f"path matches {ep['item']['name']} when its version segment is left out (the call does not name a version)", True
                 if not structural:
                     continue
                 if not exact:
@@ -554,13 +588,38 @@ def match_http(call: dict, caller: Member, providers: list[Member]) -> list[dict
                     why += f" (base URL {call['base']})"
                 context_bonus = 0.2 if ok and ep["has_context"] else 0.0
                 raw = structural + id_score + context_bonus
+                fraction = float(call.get("fraction", 1.0))
+                if fraction < 1.0:
+                    raw *= 0.75 + 0.25 * fraction  # part of the URL is only known at run time
+                if not call["method"] and (ep["method"] not in ("", "ANY", "*", "REQUEST")):
+                    raw -= 0.05  # the call's HTTP method is not known
                 total = round(min(0.99, raw), 3)
-                if best is None or raw > best["raw"]:
-                    best = {"provider": provider, "endpoint": ep["item"], "score": total, "raw": round(raw, 3),
-                            "evidence": [f"method {call['method'] or '(any)'} · {why}"] + (["context path of the provider is part of the URL"] if context_bonus else []) + id_evidence,
-                            "profile": v["profile"]}
+                evidence = [f"method {call['method'] or '(any)'} · {why}"] + (["context path of the provider is part of the URL"] if context_bonus else []) + id_evidence
+                if call.get("unresolved"):
+                    evidence.append(f"could not resolve statically: {', '.join(call['unresolved'][:4])} (confidence lowered)")
+                if call.get("condition"):
+                    evidence.append(f"only when {call['condition']}")
+                if call.get("note"):
+                    evidence.append(call["note"])
+                cand = {"provider": provider, "endpoint": ep["item"], "score": total, "raw": round(raw, 3), "evidence": evidence, "profile": v["profile"]}
+                if best is None or raw > best["raw"] + 0.001:
+                    best = cand
+                    ties = []
+                elif abs(raw - best["raw"]) <= 0.001 and ep["item"]["item_key"] != best["endpoint"]["item_key"]:
+                    ties.append(cand)
         if best and best["score"] >= 0.3:
-            candidates.append(best)
+            versions = {_version(t["endpoint"]) for t in [best] + ties}
+            if ties and len(versions) > 1:
+                note = "the call does not say which version: also matches " + ", ".join(f"{t['endpoint']['name']} ({_version(t['endpoint']) or 'unversioned'})" for t in ties[:3])
+                best["evidence"].append(note)
+                best["tie"] = True
+                candidates.append(best)
+                for t in ties[:3]:
+                    t["evidence"].append(note)
+                    t["tie"] = True
+                    candidates.append(t)
+            else:
+                candidates.append(best)
     candidates.sort(key=lambda c: -c["raw"])
     return candidates
 
@@ -607,8 +666,8 @@ def compute_links(landscape: dict, members: list[Member]) -> list[dict]:
     def group(kind: str, caller: Member, src: dict, candidates: list[dict], fallback_external: tuple[str, str] | None, features: list[str], label: str) -> None:
         group_key = f"{kind}|{caller.repo_id}|{src['key']}"
         top = candidates[0].get("raw", candidates[0]["score"]) if candidates else 0
-        ambiguous = len(candidates) > 1 and candidates[1].get("raw", candidates[1]["score"]) >= top - 0.1 and candidates[1]["provider"].repo_id != candidates[0]["provider"].repo_id \
-            and not candidates[0].get("fanout")
+        ambiguous = len(candidates) > 1 and candidates[1].get("raw", candidates[1]["score"]) >= top - 0.1 and not candidates[0].get("fanout") \
+            and (candidates[1]["provider"].repo_id != candidates[0]["provider"].repo_id or bool(candidates[0].get("tie") and candidates[1].get("tie")))
         for index, cand in enumerate(candidates):
             confidence = level(cand["score"])
             if cand.get("fanout"):
@@ -635,7 +694,7 @@ def compute_links(landscape: dict, members: list[Member]) -> list[dict]:
         for call in http_calls(caller):
             raw = []
             for cand in match_http(call, caller, members):
-                raw.append({"provider": cand["provider"], "item": cand["endpoint"], "score": cand["score"], "raw": cand["raw"], "evidence": cand["evidence"]})
+                raw.append({"provider": cand["provider"], "item": cand["endpoint"], "score": cand["score"], "raw": cand["raw"], "evidence": cand["evidence"], "tie": cand.get("tie", False)})
             label = f"{call['method']} {call['url'] or call['base']}".strip()
             host = _external_host(call, caller)
             if raw:

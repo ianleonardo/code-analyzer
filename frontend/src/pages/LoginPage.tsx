@@ -29,7 +29,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="grid-canvas relative flex min-h-screen items-center justify-center overflow-hidden px-4">
+    <div className="grid-canvas relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-8">
       <LoginBackground theme={theme} />
       <button type="button" className="icon-btn absolute right-4 top-4 z-20 h-8 w-8 border border-line bg-surface/80 backdrop-blur-sm" onClick={toggle} title="Toggle Dark Telemetry / Light Laboratory">
         <span className="material-symbols-outlined">{theme === "dark" ? "light_mode" : "dark_mode"}</span>
@@ -81,6 +81,11 @@ export function LoginPage() {
           </button>
         </form>
       </div>
+      <footer className="relative z-10 mt-6 text-center">
+        <p className="font-mono text-micro text-faint italic">
+          An application by Ian Leonardo, 2026
+        </p>
+      </footer>
     </div>
   );
 }

@@ -7,7 +7,7 @@ import { ExternalSpecModal } from "../../components/openapi/Panels";
 import { ConfirmDialog, Empty, ErrorNote, Modal, PageHeader, Select, Spinner, SplitPane } from "../../components/ui";
 import { can } from "../../permissions";
 import { LandscapeDialog } from "./LandscapesPage";
-import { CodeModal, ConfidencePill, KindChip, ReviewDialog, StatusPill } from "./ReviewDialog";
+import { CodeModal, ConfidencePill, KindChip, LinkFlags, ReviewDialog, StatusPill } from "./ReviewDialog";
 import { MethodBadge } from "../analysis/layers/ItemDetail";
 import { ScreenWireframe } from "../analysis/layers/ScreenWireframe";
 import type { CatalogItem } from "../analysis/layers/types";
@@ -675,6 +675,7 @@ function ReviewTab({ landscape, canWrite, onChanged }: { landscape: Landscape; c
                     </div>
                   </div>
                   {g.ambiguous && <span className="chip border-warning/50 text-warning">ambiguous</span>}
+                  {top[0] && <LinkFlags link={top[0]} />}
                   {top[0] && <ConfidencePill link={top[0]} />}
                   <button type="button" className="btn h-7" onClick={() => setOpen(g)}>{canWrite ? "Review…" : "View"}</button>
                 </div>
@@ -1122,7 +1123,7 @@ function LinksTab({ landscape, canWrite, initial, onChanged }: { landscape: Land
                 <div className="truncate font-mono text-code"><span className="text-muted">{l.target_repo_name || l.external_type} ·</span> {l.target_name || l.external_name}</div>
                 <div className="truncate font-mono text-micro text-faint">{l.label}</div>
               </td>
-              <td><ConfidencePill link={l} /></td>
+              <td><div className="flex flex-wrap items-center gap-1"><ConfidencePill link={l} /><LinkFlags link={l} /></div></td>
               <td><StatusPill status={l.status} /></td>
               <td className="text-body-sm text-muted">{l.features.slice(0, 2).join(", ")}</td>
               <td className="text-right">{l.kind !== "external" && <button type="button" className="btn h-6" onClick={() => void openGroup(l)}>{canWrite ? "Review…" : "View"}</button>}</td>

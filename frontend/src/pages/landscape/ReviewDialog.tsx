@@ -10,6 +10,30 @@ export function ConfidencePill({ link }: { link: Pick<LandscapeLink, "confidence
   return <span className={`chip ${color}`} title={`score ${link.score}`}>{link.confidence} {link.score.toFixed(2)}</span>;
 }
 
+const VERSION = /(?:^|\/)(v\d+(?:\.\d+)?)(?=\/|$)/i;
+
+/** Version of an endpoint name / path (`GET /v2/accounts/{id}` -> v2), "" when it has none. */
+export function versionOf(text: string): string {
+  const m = (text || "").match(VERSION);
+  return m ? m[1].toLowerCase() : "";
+}
+
+/** Small facts about a link worth seeing before confirming it: the API version, a URL only partly known statically, a conditional route. */
+export function LinkFlags({ link }: { link: Pick<LandscapeLink, "target_name" | "evidence"> }) {
+  const version = versionOf(link.target_name);
+  const partial = link.evidence.find((e) => e.startsWith("could not resolve statically"));
+  const conditional = link.evidence.find((e) => e.startsWith("only when"));
+  const noVersion = link.evidence.find((e) => e.includes("does not say which version"));
+  return (
+    <>
+      {version && <span className="chip border-primary/40 text-primary" title="API version of the matched endpoint">{version}</span>}
+      {noVersion && <span className="chip border-warning/50 text-warning" title={noVersion}>version not in call</span>}
+      {partial && <span className="chip border-warning/50 text-warning" title={partial}>partial URL</span>}
+      {conditional && <span className="chip border-line text-muted" title={conditional}>conditional</span>}
+    </>
+  );
+}
+
 export function StatusPill({ status }: { status: string }) {
   const meta = STATUS_META[status] ?? { label: status, color: "text-muted border-line" };
   return <span className={`chip ${meta.color}`}>{meta.label}</span>;
@@ -141,6 +165,7 @@ export function ReviewDialog({ landscapeId, group, canWrite, onClose, onDecided 
                   <input type="checkbox" disabled={!canWrite} checked={choice.targets.has(key)} onChange={() => toggle(key)} />
                   <span className="font-mono text-code"><span className="text-primary">{c.target_repo_name}</span> · {c.target_name}</span>
                   <ConfidencePill link={c} />
+                  <LinkFlags link={c} />
                   <StatusPill status={c.status} />
                   {c.target_path && (
                     <button type="button" className="link ml-auto font-mono text-micro" onClick={(e) => { e.preventDefault(); setCode({ analysisId: c.target_analysis_id, path: c.target_path, line: c.target_line, title: c.target_repo_name }); }}>
